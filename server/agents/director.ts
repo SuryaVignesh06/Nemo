@@ -41,7 +41,8 @@ export const DIRECTOR_SYSTEM = [
   'narration is what Nemo says aloud during the beat: one or two plain spoken',
   'sentences, no markup, no symbols that cannot be read out loud.',
   '',
-  'Use between 4 and 9 beats for a normal question.',
+  'Use between 4 and 6 beats. Each beat is one idea, and every field is one or',
+  'two short sentences — a long plan gets cut off before it is finished.',
   '',
   'Return a JSON object with keys: objective, beats (array of {beatId, order,',
   'objective, explanation, narration, completionCriteria, keepVisible,',
@@ -72,7 +73,7 @@ export async function runDirector(
     system: DIRECTOR_SYSTEM,
     user: directorUser(question, answer),
     schema: TeachingPlanSchema,
-    maxTokens: 3000,
+    maxTokens: 8000,
     temperature: 0.3,
     signal: deps.signal,
   });

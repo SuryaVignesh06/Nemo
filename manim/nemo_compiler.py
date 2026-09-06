@@ -107,6 +107,17 @@ SUPPORTED = {
     "MARK_HIGH",
     "MARK_MIDPOINT",
     "HIGHLIGHT_ARRAY_RANGE",
+    "CREATE_ESP32",
+    "CREATE_GPIO",
+    "SET_GPIO_STATE",
+    "CREATE_RESISTOR",
+    "CREATE_LED",
+    "SET_LED_STATE",
+    "CREATE_GROUND",
+    "CREATE_WIRE",
+    "CREATE_CODE_BLOCK",
+    "HIGHLIGHT_CODE_LINE",
+    "SHOW_CURRENT_FLOW",
     "CAMERA_FIT",
     "CAMERA_FOCUS",
     "CAMERA_ESTABLISH",
@@ -277,6 +288,90 @@ def _range_band(action: dict, ctx: BuildContext) -> Any:
     return SurroundingRectangle(span, color=colour, buff=0.06)
 
 
+def _esp32(action: dict, ctx: BuildContext) -> Any:
+    board = Rectangle(width=4.3, height=2.6, color=BLUE, stroke_width=3)
+    chip = Rectangle(width=1.75, height=1.08, color=BLUE, stroke_width=2)
+    chip_label = Text("CPU + WiFi", font_size=22, color=WHITE).move_to(chip)
+    usb = Rectangle(width=0.84, height=0.28, color=WHITE, stroke_width=2)
+    usb.next_to(board, DOWN, buff=-0.14)
+    label = Text("ESP32", font_size=32, color=BLUE).next_to(board, UP, buff=0.08)
+    pins = VGroup(*[
+        Circle(radius=0.045, color=YELLOW).move_to([-2.05, 0.9 - i * 0.36, 0])
+        for i in range(6)
+    ])
+    return VGroup(board, chip, chip_label, usb, label, pins)
+
+
+def _gpio(action: dict, ctx: BuildContext) -> Any:
+    params = action.get("parameters", {})
+    pin = _str(params, ["pin", "label"], "GPIO2")
+    dot = Circle(radius=0.13, color=YELLOW, stroke_width=3)
+    label = Text(pin, font_size=22, color=YELLOW).next_to(dot, RIGHT, buff=0.1)
+    return VGroup(dot, label)
+
+
+def _resistor(action: dict, ctx: BuildContext) -> Any:
+    params = action.get("parameters", {})
+    value = _str(params, ["value", "label"], "220 ohm")
+    zigzag = Polygon(
+        [-0.9, 0, 0], [-0.65, 0, 0], [-0.48, 0.22, 0], [-0.2, -0.22, 0],
+        [0.08, 0.22, 0], [0.36, -0.22, 0], [0.55, 0, 0], [0.9, 0, 0],
+        color=YELLOW,
+    )
+    label = Text(value, font_size=20, color=YELLOW).next_to(zigzag, DOWN, buff=0.12)
+    return VGroup(zigzag, label)
+
+
+def _led(action: dict, ctx: BuildContext) -> Any:
+    params = action.get("parameters", {})
+    bulb = Circle(radius=0.38, color=_color(params, YELLOW), stroke_width=3)
+    bar = Line([0.18, -0.26, 0], [0.18, 0.26, 0], color=WHITE)
+    diode = Polygon([-0.18, -0.24, 0], [-0.18, 0.24, 0], [0.16, 0, 0], color=YELLOW)
+    label = Text(_str(params, ["label"], "LED"), font_size=20, color=YELLOW)
+    label.next_to(bulb, DOWN, buff=0.12)
+    return VGroup(bulb, diode, bar, label)
+
+
+def _ground(action: dict, ctx: BuildContext) -> Any:
+    return VGroup(
+        Line([0, 0.28, 0], [0, 0, 0], color=WHITE),
+        Line([-0.38, 0, 0], [0.38, 0, 0], color=WHITE),
+        Line([-0.27, -0.12, 0], [0.27, -0.12, 0], color=WHITE),
+        Line([-0.14, -0.24, 0], [0.14, -0.24, 0], color=WHITE),
+    )
+
+
+def _wire(action: dict, ctx: BuildContext) -> Any:
+    params = action.get("parameters", {})
+    start_node = ctx.resolve(_str(params, ["from", "source"]))
+    end_node = ctx.resolve(_str(params, ["to", "destination"]))
+    if start_node is None or end_node is None:
+        return Line(LEFT, RIGHT, color=WHITE)
+    return Line(start_node.get_center(), end_node.get_center(), color=WHITE, stroke_width=3)
+
+
+def _code_block(action: dict, ctx: BuildContext) -> Any:
+    params = action.get("parameters", {})
+    code = _str(params, ["code", "text"], "digitalWrite(2, HIGH);")
+    language = _str(params, ["language"], "cpp").upper()
+    lines = VGroup(*[Text(line, font_size=20, color=WHITE) for line in code.splitlines()[:8]])
+    lines.arrange(DOWN, aligned_edge=LEFT, buff=0.12)
+    frame = SurroundingRectangle(lines, color=BLUE, buff=0.22)
+    tag = Text(language, font_size=15, color=BLUE).next_to(frame, UP, aligned_edge=LEFT, buff=0.06)
+    return VGroup(frame, lines, tag)
+
+
+def _current_flow(action: dict, ctx: BuildContext) -> Any:
+    params = action.get("parameters", {})
+    refs = params.get("wires") if isinstance(params.get("wires"), list) else []
+    marks = []
+    for ref in refs:
+        wire = ctx.resolve(str(ref))
+        if wire is not None:
+            marks.append(Arrow(wire.get_start(), wire.get_end(), color=GREEN, buff=0))
+    return VGroup(*marks) if marks else Arrow(LEFT, RIGHT, color=GREEN, buff=0)
+
+
 ADAPTERS: dict[str, Callable[[dict, BuildContext], Any]] = {}
 
 
@@ -329,6 +424,14 @@ def _register() -> None:
             "MARK_HIGH": _pointer,
             "MARK_MIDPOINT": _pointer,
             "HIGHLIGHT_ARRAY_RANGE": _range_band,
+            "CREATE_ESP32": _esp32,
+            "CREATE_GPIO": _gpio,
+            "CREATE_RESISTOR": _resistor,
+            "CREATE_LED": _led,
+            "CREATE_GROUND": _ground,
+            "CREATE_WIRE": _wire,
+            "CREATE_CODE_BLOCK": _code_block,
+            "SHOW_CURRENT_FLOW": _current_flow,
         }
     )
 
@@ -414,6 +517,18 @@ class NemoLesson(Scene):  # type: ignore[misc]
                         self.play(FadeIn(target), run_time=duration)
                     continue
 
+                if action_type in {"SET_GPIO_STATE", "SET_LED_STATE"}:
+                    target = ctx.resolve(action.get("target"))
+                    if target is not None:
+                        self.play(Indicate(target, color=GREEN), run_time=duration)
+                    continue
+
+                if action_type == "HIGHLIGHT_CODE_LINE":
+                    target = ctx.resolve(action.get("target"))
+                    if target is not None:
+                        self.play(Indicate(target, color=YELLOW), run_time=duration)
+                    continue
+
                 builder = ADAPTERS.get(action_type)
                 if builder is None:
                     raise UnsupportedAction(f"No adapter registered for {action_type}")
@@ -424,6 +539,8 @@ class NemoLesson(Scene):  # type: ignore[misc]
                     "MARK_HIGH",
                     "MARK_MIDPOINT",
                     "HIGHLIGHT_ARRAY_RANGE",
+                    "CREATE_WIRE",
+                    "SHOW_CURRENT_FLOW",
                 }:
                     _place(mobject, action, ctx, previous)
 

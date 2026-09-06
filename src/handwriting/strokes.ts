@@ -397,6 +397,7 @@ export function highlightStrokes(
     { smooth: true }
   );
   stroke.fill = color;
+  stroke.opacity = 0.34;
   stroke.closed = true;
   stroke.semanticRole = 'highlight';
   stroke.width = 0;

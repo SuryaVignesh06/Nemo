@@ -158,6 +158,9 @@ export class ModelExecutionService {
     fallbackUsed: boolean
   ): Promise<T> {
     let repairContext: { raw: string; issues: string[] } | null = null;
+    // Grows when a reply is cut off at the limit. Repeating the same request
+    // with the same budget just truncates in the same place.
+    let budgetMultiplier = 1;
 
     for (let attempt = 1; attempt <= this.retry.maxAttempts; attempt++) {
       this.throwIfAborted(req.signal);
@@ -173,7 +176,7 @@ export class ModelExecutionService {
           user,
           images: req.images,
           json: true,
-          maxTokens: req.maxTokens,
+          maxTokens: req.maxTokens ? req.maxTokens * budgetMultiplier : undefined,
           temperature: req.temperature,
           timeoutMs: req.timeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS,
           signal: req.signal,
@@ -187,7 +190,7 @@ export class ModelExecutionService {
 
         this.trace.recordSample(req.stage, raw);
 
-        const parsed = extractJson(raw);
+        const parsed = extractJson(raw, true);
         const result = req.schema.safeParse(parsed);
 
         if (!result.success) {
@@ -231,6 +234,10 @@ export class ModelExecutionService {
         this.record(req.stage, provider, attempt, started, 'FAILED', cls, message, fallbackUsed);
 
         if (cls === 'CANCELLED') throw err;
+
+        // A truncated reply is worth another attempt, but only with room to
+        // finish. Capped so a runaway model cannot escalate without bound.
+        if (cls === 'TRUNCATED_OUTPUT') budgetMultiplier = Math.min(budgetMultiplier * 2, 4);
 
         const canRetry =
           attempt < this.retry.maxAttempts && (isRetryable(cls) || isRepairable(cls));

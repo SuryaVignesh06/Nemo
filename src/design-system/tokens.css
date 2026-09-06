@@ -1,0 +1,106 @@
+/* NEMO — global design tokens.
+ *
+ * One source of truth for the whole application. Every surface, control and
+ * page reads from here, so a new feature inherits the system instead of
+ * inventing a palette. The sidebar and the chat workspace each used to carry a
+ * private set of colours, which is exactly the drift these tokens exist to
+ * stop.
+ */
+
+:root {
+  /* ---------------------------------------------------------- surfaces */
+  --bg-app: #101010;
+  --bg-sidebar: #101010;
+  --bg-elevated: #181818;
+  --bg-input: #181818;
+  --bg-hover: #222222;
+  --bg-active: #282828;
+  --bg-overlay: rgba(0, 0, 0, 0.7);
+
+  /* ------------------------------------------------------------ border */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-default: rgba(255, 255, 255, 0.11);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  /* -------------------------------------------------------------- text */
+  --text-primary: #ececec;
+  --text-secondary: #b4b4b4;
+  --text-tertiary: #8f8f8f;
+  --text-disabled: #676767;
+  --text-inverse: #1a1a1a;
+
+  /* ------------------------------------------------------------ accent
+   * Used only for active states, links, selected controls and status —
+   * never as a structural surface. */
+  --accent: #7ab7ff;
+  --accent-strong: #a8d1ff;
+  --accent-soft: rgba(122, 183, 255, 0.14);
+  --danger: #f28b82;
+  --danger-soft: rgba(242, 139, 130, 0.12);
+  --success: #7ddba4;
+
+  /* -------------------------------------------------------- typography */
+  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-page: 28px;
+  --text-section: 20px;
+  --text-heading: 17px;
+  --text-body: 15px;
+  --text-small: 13.5px;
+  --text-meta: 12px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* ----------------------------------------------------------- spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ------------------------------------------------------------ radius */
+  --radius-control: 8px;
+  --radius-input: 12px;
+  --radius-card: 14px;
+  --radius-modal: 18px;
+  --radius-pill: 999px;
+
+  /* ----------------------------------------------------------- shadows */
+  --shadow-popover: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
+
+  /* ------------------------------------------------------------ motion */
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 250ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ----------------------------------------------------------- layout */
+  --sidebar-width: 260px;
+  --sidebar-collapsed: 64px;
+  --content-max: 780px;
+
+  /* ---------------------------------------------------------- z-index */
+  --z-canvas: 1;
+  --z-chrome: 20;
+  --z-popover: 60;
+  --z-drawer: 70;
+  --z-modal: 80;
+  --z-toast: 90;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+}

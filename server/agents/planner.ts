@@ -61,7 +61,7 @@ export async function runPlanner(deps: AgentDeps, plan: TeachingPlan): Promise<V
     system: plannerSystem(),
     user: plannerUser(plan),
     schema: VisualPlanSchema,
-    maxTokens: 4000,
+    maxTokens: 6000,
     temperature: 0.2,
     signal: deps.signal,
   });

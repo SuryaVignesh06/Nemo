@@ -40,6 +40,8 @@ export interface RunRequest {
    * a live request (it costs ~20s before anything is drawn); on for demos.
    */
   review?: boolean;
+  /** Merge planner+composer into one call. Defaults on; NEMO_ECONOMY=0 disables. */
+  economy?: boolean;
 }
 
 export interface RunResult {
@@ -62,7 +64,9 @@ function intFromEnv(name: string, fallback: number): number {
 
 function retryPolicy(): RetryPolicy {
   return {
-    maxAttempts: intFromEnv('MODEL_MAX_RETRIES', 3),
+    // Each attempt spends a request from the key's budget, so the default is
+    // deliberately low. Raise MODEL_MAX_RETRIES on a paid key.
+    maxAttempts: intFromEnv('MODEL_MAX_RETRIES', 2),
     baseDelayMs: intFromEnv('MODEL_RETRY_BASE_MS', 400),
     maxDelayMs: intFromEnv('MODEL_RETRY_MAX_MS', 4000),
   };
@@ -94,6 +98,18 @@ function fallbackConfig(primary: ProviderConfig): ProviderConfig | null {
  * Default off: the live path must put ink on the board in seconds. Set
  * NEMO_REVIEW=1 to run the ManimGL render and critic/repair loop inline.
  */
+/**
+ * Economy mode is ON by default.
+ *
+ * The separate Visual Planner produces better lessons, but it costs a fourth
+ * model request, and on a free key the daily request count runs out long before
+ * quality becomes the limiting factor. Set NEMO_ECONOMY=0 for the full pipeline.
+ */
+function economyDefault(): boolean {
+  const flag = process.env.NEMO_ECONOMY;
+  return !(flag === '0' || flag === 'false');
+}
+
 function reviewDefault(): boolean {
   const flag = process.env.NEMO_REVIEW;
   return flag === '1' || flag === 'true';
@@ -149,18 +165,28 @@ export async function runWorkflow(
     reviewEnabled: req.review ?? reviewDefault(),
     onPlan: req.onPlan,
     onAnswer: req.onAnswer,
+    economy: req.economy ?? economyDefault(),
   });
 
-  const final = (await graph.invoke({
-    question,
-    requestId: req.requestId,
-    sessionId: req.sessionId,
-    lessonId: req.lessonId,
-    maxIterations: intFromEnv(
-      'VISUAL_REPAIR_MAX_ITERATIONS',
-      MAX_VISUAL_REPAIR_ITERATIONS
-    ),
-  })) as NemoStateType;
+  let final: NemoStateType;
+  try {
+    final = (await graph.invoke({
+      question,
+      requestId: req.requestId,
+      sessionId: req.sessionId,
+      lessonId: req.lessonId,
+      maxIterations: intFromEnv(
+        'VISUAL_REPAIR_MAX_ITERATIONS',
+        MAX_VISUAL_REPAIR_ITERATIONS
+      ),
+    })) as NemoStateType;
+  } catch (err) {
+    // The trace is most valuable on the path that failed: it names the stage,
+    // the attempt and the error class. Printing it only on success meant every
+    // real failure arrived with the least information.
+    if (process.env.NEMO_DEBUG === '1') console.log(trace.format());
+    throw err;
+  }
 
   if (req.signal?.aborted) {
     throw new LessonError('STALE_REQUEST', 'Superseded by a newer question.');

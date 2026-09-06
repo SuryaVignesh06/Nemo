@@ -11,7 +11,12 @@
  */
 
 import type { ActionStatus, LessonPlan, VisualAction } from '../../shared/contracts.ts';
-import { SceneStore, cameraForBounds, type Camera } from '../scene/store.ts';
+import {
+  SceneStore,
+  cameraForBounds,
+  type Camera,
+  type ViewportInsets,
+} from '../scene/store.ts';
 import { applyAction, type ActionOutcome } from '../scene/execute.ts';
 import { checkCollisions } from '../scene/store.ts';
 import { smooth } from '../manim/easing.ts';
@@ -54,17 +59,22 @@ export class Presenter {
   private voice: VoiceController;
   private cb: PresenterCallbacks;
   private viewport: () => { width: number; height: number };
+  /** Screen edges the board must stay clear of — read fresh on every use so a
+   *  panel that opens mid-lesson is respected by the next camera move. */
+  private insets: () => ViewportInsets;
 
   constructor(
     store: SceneStore,
     voice: VoiceController,
     cb: PresenterCallbacks,
-    viewport: () => { width: number; height: number }
+    viewport: () => { width: number; height: number },
+    insets: () => ViewportInsets = () => ({ top: 60, bottom: 60, left: 60, right: 60 })
   ) {
     this.store = store;
     this.voice = voice;
     this.cb = cb;
     this.viewport = viewport;
+    this.insets = insets;
   }
 
   get isRunning(): boolean {
@@ -80,6 +90,7 @@ export class Presenter {
   async play(plan: LessonPlan): Promise<void> {
     this.cancelled = false;
     this.running = true;
+    this.voice.reset();
     const totalActions = plan.beats.reduce((n, b) => n + b.visualActions.length, 0);
     let doneActions = 0;
 
@@ -115,6 +126,7 @@ export class Presenter {
             const outcome = applyAction(this.store, action, {
               lessonId: plan.lessonId,
               viewport: this.viewport(),
+              insets: this.insets(),
             });
             if (outcome.layout?.moved.length) {
               for (const m of outcome.layout.moved) this.cb.onLayoutNote(m.reason);
@@ -170,7 +182,7 @@ export class Presenter {
       // Final framing so the finished board is fully visible.
       const bounds = this.store.contentBounds();
       if (bounds) {
-        await this.tweenCamera(cameraForBounds(bounds, this.viewport(), 100, 1.1), 1.0);
+        await this.tweenCamera(cameraForBounds(bounds, this.viewport(), 100, 1.1, this.insets()), 1.0);
       }
 
       const collisions = checkCollisions(this.store);

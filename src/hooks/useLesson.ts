@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LessonEvent, LessonPlan } from '../../shared/contracts.ts';
-import { SceneStore } from '../scene/store.ts';
+import { SceneStore, type ViewportInsets } from '../scene/store.ts';
 import { Presenter, type ActionRecord, type PresenterProgress } from '../presenter/presenter.ts';
 import { VoiceController, type VoiceStatus } from '../presenter/voice.ts';
 import type { Settings } from './useSettings.ts';
@@ -62,6 +62,11 @@ const STAGE_LABELS: Record<LessonStage, string> = {
   CANCELLED: 'Cancelled',
 };
 
+export interface DefinitionItem {
+  term: string;
+  definition: string;
+}
+
 export interface LessonState {
   stage: LessonStage;
   stageLabel: string;
@@ -70,8 +75,11 @@ export interface LessonState {
   /** The written answer, streamed before any visual work. */
   answer: string;
   finalAnswer: string;
+  definitions: DefinitionItem[];
   plan: LessonPlan | null;
   narration: string;
+  /** Every line spoken so far, oldest first. The rail's Transcript tab. */
+  transcript: string[];
   beatIndex: number;
   beatCount: number;
   actionIndex: number;
@@ -90,8 +98,10 @@ const INITIAL: LessonState = {
   question: '',
   answer: '',
   finalAnswer: '',
+  definitions: [],
   plan: null,
   narration: '',
+  transcript: [],
   beatIndex: 0,
   beatCount: 0,
   actionIndex: 0,
@@ -113,12 +123,28 @@ const SILENCE_TIMEOUT_MS = 120_000;
 
 let requestCounter = 0;
 
-export function useLesson(settings: Settings, providerPayload: Record<string, unknown>) {
+function makeSessionId(): string {
+  return `s-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+}
+
+export function useLesson(
+  settings: Settings,
+  providerPayload: Record<string, unknown>,
+  /**
+   * Screen edges the board must keep clear, given whether a lesson is on
+   * screen. The rail only exists once a question has been asked, so the idle
+   * board gets the whole viewport.
+   */
+  insetsFor: (hasLesson: boolean) => ViewportInsets = () => ({
+    top: 60,
+    bottom: 60,
+    left: 60,
+    right: 60,
+  })
+) {
   const [state, setState] = useState<LessonState>(INITIAL);
   const store = useMemo(() => new SceneStore(), []);
-  const [sessionId] = useState(
-    () => `s-${Math.random().toString(36).slice(2)}-${Date.now()}`
-  );
+  const [sessionId, setSessionId] = useState(makeSessionId);
 
   const abortRef = useRef<AbortController | null>(null);
   const presenterRef = useRef<Presenter | null>(null);
@@ -165,14 +191,31 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
     []
   );
 
+  // Read at the moment of each camera move: a rail that appears part-way
+  // through the lesson must be avoided by everything drawn after it.
+  const insets = useCallback(() => insetsFor(true), [insetsFor]);
+
   const cancel = useCallback(() => {
     abortRef.current?.abort();
     presenterRef.current?.cancel();
     voiceRef.current?.stop();
   }, []);
 
+  /** Start a genuinely fresh conversation without reloading the application. */
+  const reset = useCallback(() => {
+    cancel();
+    activeRequestRef.current = '';
+    manualCameraRef.current = false;
+    store.clear();
+    voiceRef.current?.reset();
+    const nextSessionId = makeSessionId();
+    setSessionId(nextSessionId);
+    setState(INITIAL);
+    return nextSessionId;
+  }, [cancel, store]);
+
   const ask = useCallback(
-    async (question: string) => {
+    async (question: string, sessionOverride?: string) => {
       const trimmed = question.trim();
       if (!trimmed) return;
 
@@ -224,7 +267,7 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             question: trimmed,
-            sessionId,
+            sessionId: sessionOverride ?? sessionId,
             requestId,
             provider: providerPayload,
           }),
@@ -284,16 +327,17 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
               case 'lesson.started':
                 log(`lesson.started ${event.lessonId.slice(0, 8)}`);
                 break;
-              case 'lesson.answer':
-                // The written answer arrives before any drawing, so the user
-                // has something to read while the board is planned.
-                log(`lesson.answer (${event.domain})`);
+              case 'lesson.answer': {
+                log(`lesson.answer (${event.domain ?? 'general'})`);
+                const rawDefs = Array.isArray((event as any).definitions) ? (event as any).definitions : [];
                 setState((s) => ({
                   ...s,
                   answer: event.answer,
                   finalAnswer: event.finalAnswer,
+                  definitions: rawDefs,
                 }));
                 break;
+              }
               case 'lesson.status': {
                 const stage = (event.stage as LessonStage) ?? 'PLANNING';
                 log(`${event.stage}${event.detail ? `: ${event.detail}` : ''}`);
@@ -387,6 +431,12 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
                     actionIndex: p.actionIndex,
                     actionCount: p.actionCount,
                     narration: p.narration || s.narration,
+                    // One entry per spoken line: beats repeat their narration
+                    // across their own actions, so only a change appends.
+                    transcript:
+                      p.narration && p.narration !== s.transcript[s.transcript.length - 1]
+                        ? [...s.transcript, p.narration]
+                        : s.transcript,
                   }
             ),
           onAction: (r: ActionRecord) => {
@@ -408,12 +458,13 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
                 : { ...s, stage: 'FAILED', stageLabel: STAGE_LABELS.FAILED, error: message }
             ),
         },
-        viewport
+        viewport,
+        insets
       );
       presenterRef.current = presenter;
       await presenter.play(plan);
     },
-    [cancel, log, providerPayload, sessionId, settings.voiceEnabled, store, viewport]
+    [cancel, insets, log, providerPayload, sessionId, settings.voiceEnabled, store, viewport]
   );
 
   const onManualCamera = useCallback(() => {
@@ -426,5 +477,5 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
     state.stage !== 'FAILED' &&
     state.stage !== 'CANCELLED';
 
-  return { state, store, ask, cancel, busy, onManualCamera };
+  return { state, store, ask, cancel, reset, busy, onManualCamera };
 }

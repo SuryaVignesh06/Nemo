@@ -251,8 +251,16 @@ export class SceneStore {
   }
 
   /**
-   * Deterministic anti-overlap with broad-phase spatial filtering.
-   * The newly placed node is pushed away from anything it collides with.
+   * Deterministic anti-overlap.
+   *
+   * Resolution is a work queue, not a fixed number of passes over one node.
+   * The earlier version only ever re-examined the node being added, so pushing
+   * a label clear of an equation could drop it straight onto a title and the
+   * engine would never look again — which is exactly how three-way tangles
+   * ("summary_bullets still overlaps final_answer") reached the board.
+   *
+   * Every node that gets moved is re-queued, so a shove is followed through
+   * until the whole affected neighbourhood is clear or the budget runs out.
    */
   resolveCollisions(newId: string, maxPasses = 6): LayoutReport {
     const report: LayoutReport = { moved: [], unresolved: [] };
@@ -260,22 +268,40 @@ export class SceneStore {
     if (!subject) return report;
 
     const PAD = 10;
-    for (let pass = 0; pass < maxPasses; pass++) {
-      let collided = false;
+    /* Total moves allowed across the whole cascade. Scaled off the caller's
+       pass budget so the parameter still means "how hard to try". */
+    const budget = Math.max(12, maxPasses * 10);
+    /** How often each node has been shoved, to break ping-pong. */
+    const shoves = new Map<string, number>();
+    const queue: string[] = [subject.id];
+    const queued = new Set<string>([subject.id]);
+    let steps = 0;
+
+    while (queue.length > 0 && steps < budget) {
+      const currentId = queue.shift()!;
+      queued.delete(currentId);
+      const current = this.nodes.get(currentId);
+      if (!current || !current.visible || current.opacity <= 0.02) continue;
+      if (current.type === 'highlight') continue;
+      // Wires are routed against component bounds before insertion. Their
+      // rectangular extent is not their occupied area, so generic box-based
+      // collision shoving would corrupt a valid routed path.
+      if (current.type === 'wire') continue;
 
       for (const other of this.list()) {
-        if (other.id === subject.id) continue;
+        if (other.id === current.id) continue;
         if (!other.visible || other.opacity <= 0.02) continue;
         // Highlights are meant to sit on top of what they emphasise.
-        if (other.type === 'highlight' || subject.type === 'highlight') continue;
+        if (other.type === 'highlight') continue;
+        if (other.type === 'wire') continue;
         // So is anything deliberately placed on or inside the other.
-        if (this.areAttached(subject, other)) continue;
+        if (this.areAttached(current, other)) continue;
 
-        const a = worldBounds(subject);
+        const a = worldBounds(current);
         const b = worldBounds(other);
         if (a.w === 0 || a.h === 0 || b.w === 0 || b.h === 0) continue;
 
-        // Spatial broad-phase: skip nodes whose bounding box is nowhere near subject
+        // Spatial broad-phase: skip nodes nowhere near the one being resolved.
         if (
           b.x > a.x + a.w + 120 ||
           b.x + b.w < a.x - 120 ||
@@ -287,33 +313,77 @@ export class SceneStore {
 
         if (!boundsOverlap(a, b, PAD)) continue;
 
-        collided = true;
-        const subjectWins = PRIORITY_RANK[subject.priority] < PRIORITY_RANK[other.priority];
-        const mover = subjectWins ? other : subject;
-        const anchorBounds = subjectWins ? a : b;
-        const moverBounds = subjectWins ? b : a;
-        const mtv = separationVector(moverBounds, anchorBounds, PAD);
+        /*
+         * Who gives way: whoever matters less. On a tie the node written later
+         * moves, because a board is read in the order it was written and what
+         * the learner has already taken in should stay where they saw it.
+         */
+        const currentRank = PRIORITY_RANK[current.priority];
+        const otherRank = PRIORITY_RANK[other.priority];
+        let mover = current;
+        let anchor = other;
+        if (otherRank > currentRank) {
+          mover = other;
+          anchor = current;
+        } else if (otherRank === currentRank) {
+          const laterIsCurrent =
+            this.order.indexOf(current.id) > this.order.indexOf(other.id);
+          mover = laterIsCurrent ? current : other;
+          anchor = laterIsCurrent ? other : current;
+        }
 
+        // A node shoved repeatedly is wedged between two others. Move its
+        // neighbour instead of bouncing it back and forth forever.
+        if ((shoves.get(mover.id) ?? 0) >= 3 && (shoves.get(anchor.id) ?? 0) < 3) {
+          const swap = mover;
+          mover = anchor;
+          anchor = swap;
+        }
+
+        const mtv = separationVector(worldBounds(mover), worldBounds(anchor), PAD);
         mover.transform.x += mtv.x;
         mover.transform.y += mtv.y;
+        shoves.set(mover.id, (shoves.get(mover.id) ?? 0) + 1);
+        steps++;
+
         report.moved.push({
           id: mover.id,
           dx: mtv.x,
           dy: mtv.y,
-          reason: subjectWins
-            ? `reflowed ${mover.id} (${mover.priority}) for higher-priority ${subject.id}`
-            : `moved ${mover.id} clear of ${other.id} (${other.priority})`,
+          reason:
+            mover.id === current.id
+              ? `moved ${mover.id} clear of ${anchor.id} (${anchor.priority})`
+              : `reflowed ${mover.id} (${mover.priority}) for higher-priority ${anchor.id}`,
         });
+
+        // Wherever it landed may itself be occupied, so look again.
+        if (!queued.has(mover.id)) {
+          queue.push(mover.id);
+          queued.add(mover.id);
+        }
+        if (steps >= budget) break;
       }
-      if (!collided) return report;
     }
 
-    for (const other of this.list()) {
-      if (other.id === subject.id) continue;
-      if (other.type === 'highlight' || subject.type === 'highlight') continue;
-      if (this.areAttached(subject, other)) continue;
-      if (boundsOverlap(worldBounds(subject), worldBounds(other), 0)) {
-        report.unresolved.push(`${subject.id} still overlaps ${other.id}`);
+    /*
+     * Report on everything the cascade touched, not just the node that started
+     * it: a shove that parked some other label on a title is a layout failure
+     * that belongs in the log, and it used to go unmentioned.
+     */
+    const touched = [subject.id, ...report.moved.map((m) => m.id)];
+    const seen = new Set<string>();
+    for (const id of touched) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const node = this.nodes.get(id);
+      if (!node || node.type === 'highlight' || node.type === 'wire') continue;
+      for (const other of this.list()) {
+        if (other.id === node.id) continue;
+        if (other.type === 'highlight' || other.type === 'wire') continue;
+        if (this.areAttached(node, other)) continue;
+        if (boundsOverlap(worldBounds(node), worldBounds(other), 0)) {
+          report.unresolved.push(`${node.id} still overlaps ${other.id}`);
+        }
       }
     }
     return report;
@@ -344,6 +414,7 @@ export class SceneStore {
    * still be pushed clear of the "high" pointer beside it.
    */
   areAttached(a: SceneNode, b: SceneNode): boolean {
+    if (a.connections?.includes(b.id) || b.connections?.includes(a.id)) return true;
     if (!a.attachedTo && !b.attachedTo) return false;
     return (
       a.attachedTo === b.id ||
@@ -423,21 +494,21 @@ export interface ViewportInsets {
 export function cameraForBounds(
   b: Bounds,
   viewport: { width: number; height: number },
-  padding = 90,
-  maxZoom = 1.6,
-  insets: ViewportInsets = { top: 70, bottom: 190, left: 40, right: 40 }
+  padding = 60,
+  maxZoom = 1.8,
+  insets: ViewportInsets = { top: 60, bottom: 60, left: 60, right: 60 }
 ): Camera {
-  const topInset = insets.top ?? 70;
-  const bottomInset = insets.bottom ?? 190;
-  const leftInset = insets.left ?? 40;
-  const rightInset = insets.right ?? 40;
+  const topInset = insets.top ?? 60;
+  const bottomInset = insets.bottom ?? 60;
+  const leftInset = insets.left ?? 60;
+  const rightInset = insets.right ?? 60;
 
   const availW = Math.max(100, viewport.width - leftInset - rightInset);
   const availH = Math.max(100, viewport.height - topInset - bottomInset);
 
   const zoomX = availW / Math.max(1, b.w + padding * 2);
   const zoomY = availH / Math.max(1, b.h + padding * 2);
-  const zoom = Math.max(0.25, Math.min(maxZoom, Math.min(zoomX, zoomY)));
+  const zoom = Math.max(0.05, Math.min(maxZoom, Math.min(zoomX, zoomY)));
 
   const contentCenterX = b.x + b.w / 2;
   const contentCenterY = b.y + b.h / 2;
@@ -452,7 +523,9 @@ export function cameraForBounds(
 /** PASS/FAIL check that nothing protected overlaps (CHECK_COLLISION). */
 export function checkCollisions(store: SceneStore): { pass: boolean; conflicts: string[] } {
   const conflicts: string[] = [];
-  const nodes = store.list().filter((n) => n.visible && n.type !== 'highlight' && n.localBounds.w > 0);
+  const nodes = store.list().filter(
+    (n) => n.visible && n.type !== 'highlight' && n.type !== 'wire' && n.localBounds.w > 0
+  );
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i];

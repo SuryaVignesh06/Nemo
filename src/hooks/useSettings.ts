@@ -34,7 +34,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openrouter: { apiKey: '', model: 'openai/gpt-4o-mini' },
   gemini: { apiKey: '', model: 'gemini-2.5-flash' },
   voiceEnabled: true,
-  elevenlabs: { apiKey: '', voiceId: 'hpp4J3VqNfWAUOO0d1Us', modelId: 'eleven_flash_v2_5' },
+  elevenlabs: { apiKey: '', voiceId: '21m00Tcm4TlvDq8ikWAM', modelId: 'eleven_flash_v2_5' },
 };
 
 export const PROVIDER_LABELS: Record<ProviderName, string> = {
@@ -49,13 +49,23 @@ function load(): Settings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<Settings>;
+    const loadedVoiceId = parsed.elevenlabs?.voiceId;
+    const voiceId =
+      !loadedVoiceId || loadedVoiceId === 'hpp4J3VqNfWAUOO0d1Us'
+        ? '21m00Tcm4TlvDq8ikWAM'
+        : loadedVoiceId;
+
     return {
       ...DEFAULT_SETTINGS,
       ...parsed,
       zai: { ...DEFAULT_SETTINGS.zai, ...parsed.zai },
       openrouter: { ...DEFAULT_SETTINGS.openrouter, ...parsed.openrouter },
       gemini: { ...DEFAULT_SETTINGS.gemini, ...parsed.gemini },
-      elevenlabs: { ...DEFAULT_SETTINGS.elevenlabs, ...parsed.elevenlabs },
+      elevenlabs: {
+        ...DEFAULT_SETTINGS.elevenlabs,
+        ...parsed.elevenlabs,
+        voiceId,
+      },
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -69,10 +79,56 @@ export function useSettings() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
     } catch {
-      // Private browsing or a full quota: the session still works, the keys
-      // just will not survive a reload.
+      // Private browsing or a full quota
     }
   }, [settings]);
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((health: {
+        providers?: { openrouter?: boolean; zai?: boolean; gemini?: boolean };
+        defaultProvider?: ProviderName;
+        defaultModel?: string;
+      }) => {
+        if (!health?.providers) return;
+        setSettings((prev) => {
+          let next = prev;
+
+          // The browser starts on Z.AI; adopt whichever provider the server
+          // actually holds a key for rather than blocking on a key nobody set.
+          if (
+            next.provider === 'zai' &&
+            !next.zai.apiKey &&
+            health.providers?.openrouter &&
+            !health.providers?.zai
+          ) {
+            next = { ...next, provider: 'openrouter' };
+          }
+
+          /*
+           * Adopt the server's configured model — but never a model the user
+           * chose themselves. Only the untouched built-in default is replaced,
+           * so .env decides for a fresh browser and the config panel still wins
+           * once someone has picked something.
+           */
+          const target = health.defaultProvider ?? next.provider;
+          if (
+            health.defaultModel &&
+            target !== 'mock' &&
+            next[target as Exclude<ProviderName, 'mock'>] &&
+            next[target as Exclude<ProviderName, 'mock'>].model ===
+              DEFAULT_SETTINGS[target as Exclude<ProviderName, 'mock'>].model
+          ) {
+            const key = target as Exclude<ProviderName, 'mock'>;
+            next = { ...next, [key]: { ...next[key], model: health.defaultModel } };
+          }
+
+          return next;
+        });
+      })
+      .catch(() => {});
+  }, []);
 
   const update = useCallback((patch: Partial<Settings>) => {
     setSettings((prev) => ({ ...prev, ...patch }));

@@ -94,6 +94,60 @@ export function hasPlaceholderText(s: string): boolean {
 }
 
 /** Strip coordinate keys the model is not allowed to own. */
+/**
+ * How much text each kind of board action may carry.
+ *
+ * The board is a blackboard, not a page: labels, equations and step lines.
+ * Models nonetheless like to paste a paragraph into a DRAW_TEXT and call it a
+ * visual, which lands a wall of prose across the canvas and buries the diagram
+ * under it. The prose is not lost — the same words are already in the written
+ * answer and the narration — so this caps what reaches the ink.
+ */
+const BOARD_TEXT_LIMITS: Record<string, number> = {
+  WRITE_TITLE: 60,
+  WRITE_SUBTITLE: 90,
+  WRITE_LABEL: 48,
+  WRITE_BULLET: 110,
+  WRITE_NUMBERED_STEP: 120,
+  DRAW_CALLOUT: 120,
+  SHOW_FINAL_ANSWER: 220,
+  SUMMARIZE: 220,
+};
+const DEFAULT_BOARD_TEXT_LIMIT = 160;
+
+/** Parameter keys that end up as ink the learner reads. */
+const TEXT_PARAM_KEYS = ['text', 'label', 'content', 'caption', 'title', 'value'];
+
+/** Cut at the last sentence or word boundary inside the limit. */
+function shorten(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const window = text.slice(0, limit);
+  const sentence = Math.max(
+    window.lastIndexOf('. '),
+    window.lastIndexOf('? '),
+    window.lastIndexOf('! ')
+  );
+  if (sentence > limit * 0.5) return window.slice(0, sentence + 1);
+  const word = window.lastIndexOf(' ');
+  return (word > limit * 0.5 ? window.slice(0, word) : window).trimEnd() + '…';
+}
+
+/**
+ * Trim over-long text parameters in place. Returns the keys it shortened, so
+ * the trim is reported rather than done behind the caller's back.
+ */
+export function capBoardText(params: Record<string, unknown>, type: string): string[] {
+  const limit = BOARD_TEXT_LIMITS[type] ?? DEFAULT_BOARD_TEXT_LIMIT;
+  const trimmed: string[] = [];
+  for (const key of TEXT_PARAM_KEYS) {
+    const value = params[key];
+    if (typeof value !== 'string' || value.length <= limit) continue;
+    params[key] = shorten(value, limit);
+    trimmed.push(key);
+  }
+  return trimmed;
+}
+
 export function stripRawCoordinates(
   params: Record<string, unknown>
 ): { params: Record<string, unknown>; removed: string[] } {
@@ -146,7 +200,38 @@ export function validateAction(
     return { action: null, reasons: [`REJECT_RAW_CODE ${codeHits[0]}`] };
   }
 
-  const declaredType = typeof o.type === 'string' ? o.type.trim().toUpperCase() : '';
+  const TYPE_ALIASES: Record<string, string> = {
+    WRITE_TEXT: 'DRAW_TEXT',
+    SHOW_TEXT: 'DRAW_TEXT',
+    DISPLAY_TEXT: 'DRAW_TEXT',
+    CREATE_TEXT: 'DRAW_TEXT',
+    TEXT: 'DRAW_TEXT',
+    DRAW_BOX: 'DRAW_RECTANGLE',
+    CREATE_BOX: 'DRAW_RECTANGLE',
+    BOX: 'DRAW_RECTANGLE',
+    CREATE_RECTANGLE: 'DRAW_RECTANGLE',
+    CREATE_CIRCLE: 'DRAW_CIRCLE',
+    CIRCLE: 'DRAW_CIRCLE',
+    CREATE_ARROW: 'DRAW_ARROW',
+    ARROW: 'DRAW_ARROW',
+    WRITE_STEP: 'WRITE_NUMBERED_STEP',
+    STEP: 'WRITE_NUMBERED_STEP',
+    ADD_STEP: 'WRITE_NUMBERED_STEP',
+    SHOW_ANSWER: 'SHOW_FINAL_ANSWER',
+    ANSWER: 'SHOW_FINAL_ANSWER',
+    TITLE: 'WRITE_TITLE',
+    SUBTITLE: 'WRITE_SUBTITLE',
+    FORMULA: 'WRITE_FORMULA',
+    EQUATION: 'WRITE_EQUATION',
+    GRAPH: 'DRAW_AXES',
+    AXES: 'DRAW_AXES',
+  };
+
+  let declaredType = typeof o.type === 'string' ? o.type.trim().toUpperCase() : '';
+  if (declaredType && TYPE_ALIASES[declaredType]) {
+    declaredType = TYPE_ALIASES[declaredType];
+  }
+
   if (!declaredType) {
     return { action: null, reasons: [`${where}: missing action type`] };
   }
@@ -173,6 +258,14 @@ export function validateAction(
   if (removed.length) {
     reasons.push(
       `REJECT_RAW_COORDINATES ${where}: dropped model-supplied ${removed.join(', ')}; layout owns placement`
+    );
+  }
+
+  const trimmedText = capBoardText(params, canonicalType(declaredType));
+  if (trimmedText.length) {
+    reasons.push(
+      `TRIMMED_BOARD_TEXT ${where}: shortened ${trimmedText.join(', ')}; ` +
+        'prose belongs in the written answer, not on the board'
     );
   }
 

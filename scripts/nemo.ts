@@ -6,7 +6,7 @@
  *
  *   node scripts/nemo.ts health              provider + renderer diagnostics
  *   node scripts/nemo.ts demo <name>         run one acceptance scenario
- *   node scripts/nemo.ts demo all            run all four
+ *   node scripts/nemo.ts demo all            run all scenarios
  *   node scripts/nemo.ts graph               print the agent graph
  *
  * Demos run the real workflow against the configured provider. Pass
@@ -15,6 +15,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { loadEnv } from '../server/env.ts';
+
 import { LessonError } from '../shared/contracts.ts';
 import { CAPABILITIES, EXECUTABLE_TYPES } from '../shared/registry.ts';
 import { resolveProviderConfig, createProvider } from '../server/providers/index.ts';
@@ -22,6 +24,9 @@ import { ManimGLRenderer } from '../server/rendering/manimgl.ts';
 import { runWorkflow } from '../server/workflow/run.ts';
 import { buildLesson } from '../server/lesson/pipeline.ts';
 import { resolveVoiceConfig, checkVoice } from '../server/voice/index.ts';
+
+// The CLI is a first-class entry point: it reads .env exactly like the server.
+loadEnv();
 
 /* ------------------------------------------------------------ scenarios */
 
@@ -32,6 +37,7 @@ const DEMOS: Record<string, string> = {
   physics:
     'A 2 kg block is pulled along a rough horizontal surface by a 10 N force at 30 degrees above horizontal. The coefficient of kinetic friction is 0.2. Find the acceleration.',
   benzene: 'Explain benzene and why its pi electrons are delocalized.',
+  esp32: 'How does an ESP32 turn on an LED?',
 };
 
 /* --------------------------------------------------------------- helpers */

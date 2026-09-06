@@ -1153,6 +1153,98 @@ export function integralPlan(lessonId: string, requestId: string, question: stri
   };
 }
 
+/* ------------------------------------------------------------- ESP32 LED */
+
+export function esp32LedPlan(lessonId: string, requestId: string, question: string): LessonPlan {
+  seq = 0;
+  const beats: TeachingBeat[] = [
+    beat(
+      'beat-1',
+      1,
+      'Introduce the complete control path',
+      'An ESP32 GPIO output can source a logic-high voltage into a protected LED circuit.',
+      'We will follow one command all the way from software to visible light: code changes a GPIO output, current passes through a resistor and LED, and returns to ground.',
+      [
+        action('beat-1', 'WRITE_TITLE', 'lesson_title', { text: 'ESP32 turns on an LED' }, { target: 'title', priority: 'PRIMARY' }),
+        action('beat-1', 'WRITE_SUBTITLE', 'lesson_goal', { text: 'code -> GPIO -> current -> light' }, { target: 'goal', relations: below('title', 'tight') }),
+      ]
+    ),
+    beat(
+      'beat-2',
+      2,
+      'Build the hardware path',
+      'GPIO2 drives a resistor and LED connected to ground.',
+      'Here is the physical path. GPIO2 is the controlled output. The two hundred and twenty ohm resistor limits current so the LED and ESP32 pin stay safe.',
+      [
+        action('beat-2', 'CREATE_ESP32', 'microcontroller', {}, { target: 'esp32', relations: below('goal', 'normal'), priority: 'PRIMARY', timing: { pace: 'deliberate' } }),
+        action('beat-2', 'CREATE_GPIO', 'gpio_output', { board: 'esp32', pin: 'GPIO2' }, { target: 'gpio2', relations: [{ type: 'ATTACHED_TO', target: 'esp32', anchor: 'GPIO2', gap: 'tight' }], priority: 'PRIMARY' }),
+        action('beat-2', 'CREATE_RESISTOR', 'current_limiter', { value: '220 ohm' }, { target: 'resistor', relations: [{ type: 'RIGHT_OF', target: 'esp32', gap: 'normal' }], priority: 'PRIMARY' }),
+        action('beat-2', 'CREATE_LED', 'light_output', { label: 'LED' }, { target: 'led', relations: [{ type: 'RIGHT_OF', target: 'resistor', gap: 'normal' }], priority: 'PRIMARY' }),
+        action('beat-2', 'CREATE_GROUND', 'return_path', {}, { target: 'ground', relations: [{ type: 'BELOW', target: 'led', gap: 'normal' }], priority: 'PRIMARY' }),
+      ]
+    ),
+    beat(
+      'beat-3',
+      3,
+      'Connect the circuit',
+      'The runtime routes wires from semantic terminals and avoids existing components.',
+      'Now connect the named terminals. NEMO chooses no pixel coordinates here; the router uses the GPIO, resistor, LED and ground anchors to build the path.',
+      [
+        action('beat-3', 'CREATE_WIRE', 'gpio_to_resistor', { from: 'gpio2', to: 'resistor', fromAnchor: 'right', toAnchor: 'left' }, { target: 'wire_gpio_resistor', priority: 'SECONDARY' }),
+        action('beat-3', 'CREATE_WIRE', 'resistor_to_led', { from: 'resistor', to: 'led', fromAnchor: 'right', toAnchor: 'anode' }, { target: 'wire_resistor_led', priority: 'SECONDARY' }),
+        action('beat-3', 'CREATE_WIRE', 'led_to_ground', { from: 'led', to: 'ground', fromAnchor: 'cathode', toAnchor: 'top' }, { target: 'wire_led_ground', priority: 'SECONDARY' }),
+      ]
+    ),
+    beat(
+      'beat-4',
+      4,
+      'Connect software to the GPIO state',
+      'digitalWrite sets the output latch for GPIO2 to HIGH.',
+      'The program configures the pin as an output, then digitalWrite sets it HIGH. HIGH means the pin presents a voltage relative to ground.',
+      [
+        action('beat-4', 'CREATE_CODE_BLOCK', 'source_code', { language: 'cpp', code: 'pinMode(2, OUTPUT);\ndigitalWrite(2, HIGH);' }, { target: 'code', relations: [{ type: 'BELOW', target: 'esp32', gap: 'loose' }], priority: 'PRIMARY' }),
+        action('beat-4', 'HIGHLIGHT_CODE_LINE', 'active_statement', { line: 2 }, { target: 'code', priority: 'SECONDARY' }),
+        action('beat-4', 'SET_GPIO_STATE', 'logic_high', { state: 'HIGH' }, { target: 'gpio2', priority: 'PRIMARY' }),
+      ]
+    ),
+    beat(
+      'beat-5',
+      5,
+      'Show electrical cause and effect',
+      'Conventional current flows through the resistor and LED, which emits light.',
+      'With GPIO2 high, conventional current flows through the resistor, through the LED, and toward ground. The resistor controls the current; the LED converts electrical energy into light.',
+      [
+        action('beat-5', 'SHOW_CURRENT_FLOW', 'current_path', { wires: ['wire_gpio_resistor', 'wire_resistor_led', 'wire_led_ground'] }, { target: 'current_flow', priority: 'SECONDARY', timing: { pace: 'deliberate' } }),
+        action('beat-5', 'SET_LED_STATE', 'visible_output', { state: 'ON' }, { target: 'led', priority: 'PRIMARY', timing: { pace: 'deliberate' } }),
+      ]
+    ),
+    beat(
+      'beat-6',
+      6,
+      'Conclude',
+      'The software instruction changes a physical output through a protected current path.',
+      'So the complete chain is: digitalWrite sets GPIO2 high, current flows through the limiting resistor and LED to ground, and the LED turns on.',
+      [
+        action('beat-6', 'SHOW_FINAL_ANSWER', 'lesson_conclusion', { text: 'GPIO HIGH -> limited current -> LED ON' }, { target: 'final_answer', relations: below('code', 'normal'), priority: 'PRIMARY' }),
+        action('beat-6', 'CAMERA_FIT', 'final_frame', {}, {}),
+        action('beat-6', 'SECTION_END', 'end_of_lesson', { sectionId: 'esp32_led' }, {}),
+      ]
+    ),
+  ];
+
+  return {
+    lessonId,
+    requestId,
+    question,
+    domain: 'embedded_systems',
+    answer: 'The ESP32 turns on the LED by setting GPIO2 HIGH. That creates a voltage across the series path, current flows through a 220 ohm limiting resistor and the LED to ground, and the LED emits light.',
+    objective: 'Trace an ESP32 LED command from code through GPIO state and circuit current to emitted light.',
+    finalSummary: 'digitalWrite sets GPIO2 HIGH; the resistor limits current; the LED turns ON and current returns to ground.',
+    beats,
+    status: 'READY',
+  };
+}
+
 /* ------------------------------------------------------------- dispatch */
 
 /** Route a question to a scripted plan, or fail explicitly. */
@@ -1173,6 +1265,7 @@ export function mockPlanFor(lessonId: string, requestId: string, question: strin
   }
 
   if (/binary\s*search/.test(q)) return binarySearchPlan(lessonId, requestId, question);
+  if (/esp32/.test(q) && /(led|light|gpio|turn\s*on)/.test(q)) return esp32LedPlan(lessonId, requestId, question);
   if (/benzene|aromatic|chemistry/.test(q)) return benzenePlan(lessonId, requestId, question);
   if (/physics|force|friction|block|acceleration/.test(q)) return physicsPlan(lessonId, requestId, question);
   if (/integral|area\s*under|calculus|\\int/.test(q)) return integralPlan(lessonId, requestId, question);
@@ -1180,7 +1273,7 @@ export function mockPlanFor(lessonId: string, requestId: string, question: strin
 
   throw new LessonError(
     'UNSUPPORTED',
-    'Demo Mode only covers the scripted scenarios: "Explain binary search", "Benzene chemistry structure", "Physics block force & friction", "Definite integral area under curve", a linear equation such as "2x + 5 = 17", and "Explain the area of a triangle". Switch to a live provider in the config panel to ask anything else.'
+    'Demo Mode only covers the scripted scenarios: "How does an ESP32 turn on an LED?", "Explain binary search", "Benzene chemistry structure", "Physics block force & friction", "Definite integral area under curve", a linear equation such as "2x + 5 = 17", and "Explain the area of a triangle". Switch to a live provider in the config panel to ask anything else.'
   );
 }
 

@@ -171,6 +171,7 @@ describe('end to end — LangGraph through real ManimGL', () => {
       renderer: new ManimGLRenderer(),
       criticEnabled: true,
       reviewEnabled: true,
+      economy: false,
     });
 
     const final = (await graph.invoke({

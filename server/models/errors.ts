@@ -24,6 +24,7 @@ export type ErrorClass =
   | 'INVALID_REQUEST'
   | 'PROVIDER_ERROR'
   | 'EMPTY_OUTPUT'
+  | 'TRUNCATED_OUTPUT'
   | 'MALFORMED_OUTPUT'
   | 'VALIDATION_ERROR'
   | 'CANCELLED'
@@ -42,6 +43,8 @@ const RETRYABLE: ReadonlySet<ErrorClass> = new Set<ErrorClass>([
   'RATE_LIMIT',
   'PROVIDER_ERROR',
   'EMPTY_OUTPUT',
+  // Retryable, but only with a larger token budget — see execution.ts.
+  'TRUNCATED_OUTPUT',
 ]);
 
 /** MALFORMED_OUTPUT is retryable, but only through a repair prompt. */
@@ -50,6 +53,7 @@ const REPAIRABLE: ReadonlySet<ErrorClass> = new Set<ErrorClass>(['MALFORMED_OUTP
 const CODE_TO_CLASS: Record<FailureCode, ErrorClass> = {
   MISSING_CREDENTIALS: 'AUTHENTICATION',
   EMPTY_RESPONSE: 'EMPTY_OUTPUT',
+  TRUNCATED_OUTPUT: 'TRUNCATED_OUTPUT',
   INVALID_RESPONSE: 'MALFORMED_OUTPUT',
   TIMEOUT: 'TIMEOUT',
   RATE_LIMIT: 'RATE_LIMIT',
@@ -87,6 +91,8 @@ export function classToCode(cls: ErrorClass): FailureCode {
       return 'MISSING_CREDENTIALS';
     case 'EMPTY_OUTPUT':
       return 'EMPTY_RESPONSE';
+    case 'TRUNCATED_OUTPUT':
+      return 'TRUNCATED_OUTPUT';
     case 'MALFORMED_OUTPUT':
       return 'INVALID_RESPONSE';
     case 'TIMEOUT':

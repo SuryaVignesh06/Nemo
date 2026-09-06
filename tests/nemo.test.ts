@@ -15,7 +15,9 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { solveEquation, looksLikeEquation, ParseError } from '../shared/solver.ts';
+import { isDemoQuestion } from '../server/app.ts';
 import {
+  capBoardText,
   containsRawCode,
   hasPlaceholderText,
   normaliseBeat,
@@ -228,6 +230,55 @@ function minimalPlan(overrides: Partial<LessonPlan> = {}): LessonPlan {
     ...overrides,
   };
 }
+
+describe('the board stays a board', () => {
+  const PROSE =
+    'Binary search is an efficient algorithm for finding a target value within a sorted ' +
+    'array. It works by repeatedly dividing the search interval in half. The key insight ' +
+    'is that since the array is sorted, we can eliminate half of the remaining elements ' +
+    'with each comparison, which is what gives it logarithmic time.';
+
+  test('a paragraph pasted into a board action is cut down to a headline', () => {
+    const params: Record<string, unknown> = { text: PROSE };
+    const trimmed = capBoardText(params, 'DRAW_TEXT');
+    assert.deepEqual(trimmed, ['text']);
+    assert.ok((params.text as string).length <= 161);
+    // Cut at a boundary, not mid-word.
+    assert.ok(/[.…]$/.test(params.text as string), params.text as string);
+  });
+
+  test('a title is held to a tighter limit than a final answer', () => {
+    const title: Record<string, unknown> = { text: PROSE };
+    const answer: Record<string, unknown> = { text: PROSE };
+    capBoardText(title, 'WRITE_TITLE');
+    capBoardText(answer, 'SHOW_FINAL_ANSWER');
+    assert.ok((title.text as string).length < (answer.text as string).length);
+  });
+
+  test('short labels are left exactly as written', () => {
+    const params: Record<string, unknown> = { text: 'low', label: 'mid = (low + high) / 2' };
+    assert.deepEqual(capBoardText(params, 'WRITE_LABEL'), []);
+    assert.equal(params.text, 'low');
+    assert.equal(params.label, 'mid = (low + high) / 2');
+  });
+
+  test('validateAction reports the trim rather than doing it quietly', () => {
+    const { action, reasons } = validateAction(
+      {
+        actionId: 'a1',
+        type: 'DRAW_TEXT',
+        semanticRole: 'PRIMARY',
+        target: 'wall_of_text',
+        parameters: { text: PROSE },
+      },
+      'beat-1',
+      0
+    );
+    assert.ok(action);
+    assert.ok((action!.parameters.text as string).length < PROSE.length);
+    assert.ok(reasons.some((r) => r.startsWith('TRIMMED_BOARD_TEXT')), reasons.join('; '));
+  });
+});
 
 describe('lesson plan validation', () => {
   test('accepts each of the scripted scenarios', () => {
@@ -524,6 +575,43 @@ describe('security posture', () => {
       const text = readFileSync(file, 'utf8');
       assert.ok(!/sk-[A-Za-z0-9]{20,}/.test(text), `${file} contains a literal API key`);
       assert.ok(!/xi-api-key['"]\s*:\s*['"][A-Za-z0-9]{16,}/.test(text), `${file} hard-codes a voice key`);
+    }
+  });
+});
+
+describe('demo keywords draw the scripted lesson', () => {
+  test('every scripted scenario is recognised from the composer', () => {
+    for (const q of [
+      'binary search',
+      'Explain binary search.',
+      'How does an ESP32 turn on an LED?',
+      'esp-32 gpio',
+      'benzene',
+      'Explain benzene structure and electron delocalization.',
+      'friction',
+      'integral',
+      'Evaluate the definite integral of x^2.',
+      'area under the curve',
+      'Explain the area of a triangle.',
+      '2x + 5 = 17',
+    ]) {
+      assert.ok(isDemoQuestion(q), `"${q}" should run the demo`);
+    }
+  });
+
+  test('an ordinary question is left to the model', () => {
+    // These mention demo *subjects* without naming a demo. Routing them to a
+    // scripted lesson would answer a question nobody asked.
+    for (const q of [
+      'Explain how a MOSFET amplifies a signal',
+      'What is the electrostatic force between two charges?',
+      'Explain organic chemistry nomenclature',
+      'How does a linked list differ from an array?',
+      'Why do semiconductors have a band gap?',
+      '',
+      '   ',
+    ]) {
+      assert.equal(isDemoQuestion(q), false, `"${q}" should reach the live model`);
     }
   });
 });

@@ -28,6 +28,9 @@ export type Domain =
   | 'physics'
   | 'chemistry'
   | 'biology'
+  | 'electrical_engineering'
+  | 'semiconductor'
+  | 'embedded_systems'
   | 'general';
 
 /** Section 14 spatial relation. The model never supplies coordinates. */
@@ -144,6 +147,10 @@ export type LessonEvent =
 export type FailureCode =
   | 'MISSING_CREDENTIALS'
   | 'EMPTY_RESPONSE'
+  /** Provider stopped at max_tokens before finishing. Distinct from empty:
+   *  the answer was coming, the budget ran out. Retrying identically repeats
+   *  it; retrying with a bigger budget does not. */
+  | 'TRUNCATED_OUTPUT'
   | 'INVALID_RESPONSE'
   | 'TIMEOUT'
   | 'RATE_LIMIT'
@@ -216,7 +223,12 @@ export type SceneNodeType =
   | 'atom'
   | 'molecule'
   | 'reaction'
-  | 'points';
+  | 'points'
+  | 'code'
+  | 'component'
+  | 'circuit'
+  | 'microcontroller'
+  | 'wire';
 
 export interface SceneNode {
   id: string;
@@ -241,6 +253,10 @@ export interface SceneNode {
    * anti-overlap engine leaves the pair alone.
    */
   attachedTo?: string;
+  /** Other scene objects this node is intentionally connected to. */
+  connections?: string[];
+  /** Semantic runtime state such as GPIO=HIGH or LED=ON. */
+  state?: Record<string, string | number | boolean>;
   /** Set when the node was produced by an action, for traceability. */
   actionId?: string;
 }

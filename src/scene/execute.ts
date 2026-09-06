@@ -9,7 +9,13 @@
 
 import type { InkStroke, Priority, SceneNode, VisualAction, Vec2 } from '../../shared/contracts.ts';
 import { worldBounds } from '../../shared/contracts.ts';
-import { SceneStore, cameraForBounds, type Camera, type LayoutReport } from './store.ts';
+import {
+  SceneStore,
+  cameraForBounds,
+  type Camera,
+  type LayoutReport,
+  type ViewportInsets,
+} from './store.ts';
 import {
   arcStrokes,
   arrowStrokes,
@@ -22,11 +28,13 @@ import {
   normaliseToOrigin,
   polylineStrokes,
   rectStrokes,
+  strokesBounds,
   textToStrokes,
   translateStrokes,
   type StrokeStyle,
 } from '../handwriting/strokes.ts';
 import type { Pt } from '../handwriting/glyphs.ts';
+import { currentMarker, electronicsGeometry } from './visuals/electronics.ts';
 
 export const INK = {
   chalk: '#f4f1e8',
@@ -87,6 +95,12 @@ export interface ActionOutcome {
 export interface ExecContext {
   lessonId: string;
   viewport: { width: number; height: number };
+  /**
+   * Screen edges the board must keep clear — chiefly the lesson rail on the
+   * right. Every camera move honours these, so framing a diagram never parks
+   * it behind a panel.
+   */
+  insets?: ViewportInsets;
 }
 
 /* ------------------------------------------------------------- parameters */
@@ -267,6 +281,181 @@ function wrapText(text: string, fontSize: number, maxWidth: number): string[] {
   return lines;
 }
 
+function applyGeometry(
+  store: SceneStore,
+  action: VisualAction,
+  ctx: ExecContext
+): ActionOutcome {
+  const built = electronicsGeometry(action.type, action.parameters ?? {}, `${ctx.lessonId}:${action.actionId}`);
+  if (!built) return miss(action, `no electronic geometry for ${action.type}`);
+  const rawBounds = strokesBounds(built.strokes);
+  const node = makeNode(action, built.type, built.strokes, built.color, store);
+  if (built.anchors) {
+    node.anchors = Object.fromEntries(
+      Object.entries(built.anchors).map(([name, point]) => [
+        name,
+        { x: point.x - rawBounds.x, y: point.y - rawBounds.y },
+      ])
+    );
+  }
+  node.state = built.state;
+
+  let layout: LayoutReport;
+  if (action.type === 'CREATE_GPIO') {
+    const boardRef = str(action.parameters, ['board', 'parent'], action.relations?.[0]?.target ?? '');
+    const board = store.resolve(boardRef);
+    const pinName = str(action.parameters, ['pin', 'name'], 'GPIO2');
+    if (!board) return miss(action, `CREATE_GPIO could not resolve board "${boardRef}"`);
+    const anchor = store.anchorPoint(board, pinName);
+    const bb = worldBounds(board);
+    const onRight = anchor.x >= bb.x + bb.w / 2;
+    node.attachedTo = board.id;
+    node.connections = [board.id];
+    layout = store.addAt(
+      node,
+      onRight ? anchor.x + 8 : anchor.x - node.localBounds.w - 8,
+      anchor.y - node.localBounds.h / 2
+    );
+  } else {
+    layout = store.add(node, action.relations);
+  }
+  return {
+    kind: 'draw',
+    nodeIds: [node.id],
+    duration: pace(action, action.type === 'CREATE_ESP32' ? 2.4 : 1.1),
+    layout,
+    note: `created ${action.type}`,
+  };
+}
+
+function segmentHitsBounds(a: Vec2, b: Vec2, box: { x: number; y: number; w: number; h: number }): boolean {
+  const pad = 12;
+  const left = box.x - pad;
+  const right = box.x + box.w + pad;
+  const top = box.y - pad;
+  const bottom = box.y + box.h + pad;
+  if (Math.abs(a.x - b.x) < 0.01) {
+    return a.x > left && a.x < right && Math.max(a.y, b.y) > top && Math.min(a.y, b.y) < bottom;
+  }
+  if (Math.abs(a.y - b.y) < 0.01) {
+    return a.y > top && a.y < bottom && Math.max(a.x, b.x) > left && Math.min(a.x, b.x) < right;
+  }
+  return false;
+}
+
+/** Deterministic orthogonal routing; the model supplies object IDs, never pixels. */
+function routedWire(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  const p = action.parameters ?? {};
+  const from = store.resolve(str(p, ['from', 'source']));
+  const to = store.resolve(str(p, ['to', 'destination']));
+  if (!from || !to) return miss(action, 'CREATE_WIRE needs existing from/to objects');
+  const start = store.anchorPoint(from, str(p, ['fromAnchor', 'sourceAnchor'], 'right'));
+  const end = store.anchorPoint(to, str(p, ['toAnchor', 'destinationAnchor'], 'left'));
+  const midX = (start.x + end.x) / 2;
+  const midY = (start.y + end.y) / 2;
+  const obstacles = store
+    .list()
+    .filter((node) => node.id !== from.id && node.id !== to.id && node.type !== 'wire')
+    .map(worldBounds);
+  const candidates: Vec2[][] = [
+    [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end],
+    [start, { x: start.x, y: midY }, { x: end.x, y: midY }, end],
+    [start, { x: start.x, y: Math.min(start.y, end.y) - 70 }, { x: end.x, y: Math.min(start.y, end.y) - 70 }, end],
+    [start, { x: start.x, y: Math.max(start.y, end.y) + 70 }, { x: end.x, y: Math.max(start.y, end.y) + 70 }, end],
+  ];
+  const score = (points: Vec2[]) => {
+    let hits = 0;
+    let length = 0;
+    for (let i = 1; i < points.length; i++) {
+      length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+      hits += obstacles.filter((box) => segmentHitsBounds(points[i - 1], points[i], box)).length;
+    }
+    return hits * 1_000_000 + length;
+  };
+  const points = candidates.map((route) => ({ route, score: score(route) })).sort((a, b) => a.score - b.score)[0].route;
+  const strokes = polylineStrokes(
+    points.map((point) => [point.x, point.y] as Pt),
+    `${ctx.lessonId}:${action.actionId}:wire`,
+    { color: INK.cyan, width: 3 }
+  );
+  const raw = strokesBounds(strokes);
+  const node = makeNode(action, 'wire', strokes, INK.cyan, store);
+  node.connections = [from.id, to.id];
+  node.state = { from: from.id, to: to.id, routed: true };
+  const layout = store.addAt(node, raw.x, raw.y);
+  return { kind: 'draw', nodeIds: [node.id], duration: pace(action, 0.8), layout, note: `wired ${from.id} to ${to.id}` };
+}
+
+function highlightCodeLine(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  const code = store.resolve(action.target);
+  if (!code) return miss(action, `HIGHLIGHT_CODE_LINE target "${action.target}" does not exist`);
+  const line = Math.max(1, Math.round(num(action.parameters, ['line', 'lineNumber'], 1)));
+  const anchor = store.anchorPoint(code, `line${line}`);
+  const cb = worldBounds(code);
+  const strokes = highlightStrokes(cb.x + 8, anchor.y - 12, Math.max(40, cb.w - 16), 24, `${ctx.lessonId}:${action.actionId}`, INK.amber);
+  const raw = strokesBounds(strokes);
+  const node = makeNode({ ...action, target: `${code.id}-line-${line}-highlight` }, 'highlight', strokes, INK.amber, store);
+  node.attachedTo = code.id;
+  const layout = store.addAt(node, raw.x, raw.y);
+  return { kind: 'emphasis', nodeIds: [node.id], duration: pace(action, 0.65), emphasis: 'highlight', layout, note: `highlighted code line ${line}` };
+}
+
+function setElectronicState(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  const node = store.resolve(action.target);
+  if (!node) return miss(action, `${action.type} target "${action.target}" does not exist`);
+  const state = str(action.parameters, ['state', 'value', 'level'], 'ON').toUpperCase();
+  const on = state === 'ON' || state === 'HIGH' || state === '1';
+  node.state = { ...(node.state ?? {}), ...(action.type === 'SET_GPIO_STATE' ? { level: on ? 'HIGH' : 'LOW' } : { power: on ? 'ON' : 'OFF' }) };
+  const color = on ? INK.green : INK.red;
+  node.color = color;
+  node.strokes = node.strokes.map((stroke) => ({ ...stroke, color }));
+  store.touch();
+  const label = action.type === 'SET_GPIO_STATE' ? `GPIO ${on ? 'HIGH' : 'LOW'}` : `LED ${on ? 'ON' : 'OFF'}`;
+  return buildText(
+    store,
+    {
+      ...action,
+      target: `${node.id}-state`,
+      parameters: { text: label },
+      relations: [{
+        type: action.type === 'SET_GPIO_STATE' ? 'ABOVE' : 'RIGHT_OF',
+        target: node.id,
+        gap: 'tight',
+      }],
+      priority: 'SECONDARY',
+    },
+    ctx,
+    label,
+    FONT.label,
+    color,
+    'highlight'
+  );
+}
+
+function showCurrentFlow(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  const refs = list(action.parameters, ['wires', 'path']).filter((ref): ref is string => typeof ref === 'string');
+  const wires = refs.map((ref) => store.resolve(ref)).filter((node): node is SceneNode => Boolean(node));
+  if (wires.length === 0) return miss(action, 'SHOW_CURRENT_FLOW needs at least one existing wire');
+  const strokes: InkStroke[] = [];
+  for (const [index, wire] of wires.entries()) {
+    const b = worldBounds(wire);
+    const horizontal = b.w >= b.h;
+    const from = horizontal
+      ? { x: b.x + b.w * 0.28, y: b.y + b.h / 2 }
+      : { x: b.x + b.w / 2, y: b.y + b.h * 0.28 };
+    const to = horizontal
+      ? { x: b.x + b.w * 0.72, y: b.y + b.h / 2 }
+      : { x: b.x + b.w / 2, y: b.y + b.h * 0.72 };
+    strokes.push(...currentMarker(from, to, `${ctx.lessonId}:${action.actionId}:${index}`));
+  }
+  const raw = strokesBounds(strokes);
+  const node = makeNode(action, 'wire', strokes, INK.green, store);
+  node.attachedTo = wires[0].id;
+  node.connections = wires.map((wire) => wire.id);
+  const layout = store.addAt(node, raw.x, raw.y);
+  return { kind: 'draw', nodeIds: [node.id], duration: pace(action, 1.2), layout, note: 'showed conventional current flow' };
+}
+
 /* ------------------------------------------------------------ the executor */
 
 export function applyAction(
@@ -279,6 +468,28 @@ export function applyAction(
   const style = (color: string, width = 2.6): StrokeStyle => ({ color, width });
 
   switch (action.type) {
+    /* ----------------------------------------- embedded systems + circuits */
+    case 'CREATE_ESP32':
+    case 'CREATE_RESISTOR':
+    case 'CREATE_LED':
+    case 'CREATE_GROUND':
+    case 'CREATE_CODE_BLOCK':
+    case 'CREATE_GPIO':
+      return applyGeometry(store, action, ctx);
+
+    case 'CREATE_WIRE':
+      return routedWire(store, action, ctx);
+
+    case 'HIGHLIGHT_CODE_LINE':
+      return highlightCodeLine(store, action, ctx);
+
+    case 'SET_GPIO_STATE':
+    case 'SET_LED_STATE':
+      return setElectronicState(store, action, ctx);
+
+    case 'SHOW_CURRENT_FLOW':
+      return showCurrentFlow(store, action, ctx);
+
     /* ---------------------------------------------------------- text */
     case 'DRAW_TEXT':
     case 'WRITE_HANDWRITING':
@@ -1005,7 +1216,7 @@ export function applyAction(
         kind: 'camera',
         nodeIds: [],
         duration: pace(action, 1.0),
-        camera: cameraForBounds(b, ctx.viewport, 110, 1.25),
+        camera: cameraForBounds(b, ctx.viewport, 110, 1.25, ctx.insets),
       };
     }
 
@@ -1023,7 +1234,7 @@ export function applyAction(
         kind: 'camera',
         nodeIds: [],
         duration: pace(action, 0.9),
-        camera: cameraForBounds(b, ctx.viewport, action.type === 'CAMERA_DETAIL' ? 60 : 150, maxZoom),
+        camera: cameraForBounds(b, ctx.viewport, action.type === 'CAMERA_DETAIL' ? 60 : 150, maxZoom, ctx.insets),
       };
     }
 
@@ -1060,7 +1271,7 @@ export function applyAction(
         kind: 'camera',
         nodeIds: [],
         duration: pace(action, 0.9),
-        camera: b ? cameraForBounds(b, ctx.viewport, 120, 1.1) : { x: 800, y: 450, zoom: 1 },
+        camera: b ? cameraForBounds(b, ctx.viewport, 120, 1.1, ctx.insets) : { x: 800, y: 450, zoom: 1 },
       };
     }
 

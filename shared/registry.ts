@@ -51,7 +51,43 @@ export type CapabilitySection =
   | '29. Visual Instruction IR'
   | '30. Anti-overlap policy'
   | '31. AI output constraints'
-  | '32. MVP compatibility aliases';
+  | '32. MVP compatibility aliases'
+  | '33. Electrical and embedded systems';
+
+/**
+ * Version of the machine-readable registry contract. Bump this when metadata
+ * fields or their meaning changes; individual capability additions do not need
+ * a schema-version bump.
+ */
+export const VISUAL_FUNCTION_REGISTRY_VERSION = '1.0.0';
+
+export type CapabilityRenderer = 'browser-canvas' | 'none';
+export type CapabilityImplementationStatus = 'implemented' | 'documented-only';
+export type CapabilityTestStatus = 'registry-covered' | 'not-implemented';
+
+export interface CapabilityImplementationMetadata {
+  status: CapabilityImplementationStatus;
+  /** Repository-relative path. Null means there is deliberately no executor. */
+  file: string | null;
+  entryPoint: string | null;
+  /** The action type dispatched by the executor after alias resolution. */
+  canonicalType: string;
+}
+
+export interface CapabilityTestMetadata {
+  status: CapabilityTestStatus;
+  /** Registry coverage only; visual regression coverage is tracked separately. */
+  file: string;
+}
+
+export interface CapabilityExample {
+  intent: string;
+  action: {
+    type: string;
+    semanticRole: string;
+    parameters: Readonly<Record<string, never>>;
+  };
+}
 
 export interface Capability {
   /** Canonical registry name, e.g. DRAW_CIRCLE. */
@@ -64,6 +100,16 @@ export interface Capability {
   implemented: boolean;
   /** For aliases: the canonical capability actually executed. */
   aliasOf?: string;
+  /** Metadata used by inventory, search, and function selection. */
+  version: string;
+  domain: string;
+  category: string;
+  renderer: CapabilityRenderer;
+  implementation: CapabilityImplementationMetadata;
+  test: CapabilityTestMetadata;
+  example: CapabilityExample;
+  /** Deterministically derived search terms; never renderer source code. */
+  keywords: readonly string[];
 }
 
 /**
@@ -109,6 +155,10 @@ const IMPLEMENTED = new Set<string>([
   'CREATE_BENZENE', 'SHOW_PI_CLOUD', 'SHOW_RESONANCE', 'ANIMATE_ELECTRON_DELOCALIZATION', 'SUBSTITUTE_GROUP',
   'PLOT_POINTS', 'SHOW_TANGENT', 'SHADE_AREA',
   'CREATE_RIEMANN_SUM', 'REFINE_PARTITIONS', 'SHOW_AREA', 'SHOW_ANTIDERIVATIVE', 'EVALUATE_BOUNDS',
+  // embedded/circuit vertical slice
+  'CREATE_ESP32', 'CREATE_GPIO', 'SET_GPIO_STATE', 'CREATE_RESISTOR', 'CREATE_LED',
+  'SET_LED_STATE', 'CREATE_GROUND', 'CREATE_WIRE', 'CREATE_CODE_BLOCK',
+  'HIGHLIGHT_CODE_LINE', 'SHOW_CURRENT_FLOW',
   // MVP aliases from the build spec
   'DRAW_GRAPH', 'DRAW_AXIS', 'MOVE_OBJECT', 'TRANSFORM_OBJECT', 'FADE_OBJECT',
   'REVEAL_STROKE', 'UNDERLINE', 'STRIKE_TERM', 'HIGHLIGHT_TERM', 'DRAW_SHAPE',
@@ -591,6 +641,19 @@ REJECT_INCOMPLETE_PLAN|Reject missing final beat/visual actions.|plan|Repair bef
 REJECT_STALE_REQUEST|Reject superseded request.|request/session IDs|Newest active request wins.
 REJECT_UNRELATED_FALLBACK|Never substitute old demo.|failure context|Controlled error.`],
 
+  ['33. Electrical and embedded systems', `
+CREATE_ESP32|Create a semantic ESP32 board with CPU, radio, USB, pin headers and named GPIO anchors.|label, highlightedPins|Persistent microcontroller object.
+CREATE_GPIO|Expose a named GPIO terminal on a microcontroller.|board, pin|GPIO object attached to the board.
+SET_GPIO_STATE|Change a GPIO between LOW and HIGH while preserving the same object.|target, state|Semantic state mutation.
+CREATE_RESISTOR|Draw an educational resistor with terminals and value label.|value, label|Circuit component.
+CREATE_LED|Draw an LED with electrical terminals and light rays.|label|Circuit component.
+SET_LED_STATE|Turn an existing LED ON or OFF without replacing it.|target, state|Semantic state mutation.
+CREATE_GROUND|Draw a ground reference with a connection anchor.|label|Circuit component.
+CREATE_WIRE|Route an orthogonal wire between semantic anchors.|from, to, fromAnchor, toAnchor|Deterministic connected path.
+CREATE_CODE_BLOCK|Draw a compact, line-addressable code panel.|language, code|Code object with line anchors.
+HIGHLIGHT_CODE_LINE|Highlight a named line in an existing code block.|target, line|Attached emphasis.
+SHOW_CURRENT_FLOW|Draw directional current markers along connected wires.|wires, direction|Current-flow overlay.`],
+
   ['32. MVP compatibility aliases', `
 DRAW_GRAPH|Plot a function graph (alias).|expression, domain|Executes PLOT_FUNCTION.
 DRAW_AXIS|Create graph axes (alias).|ranges|Executes CREATE_AXES.
@@ -604,6 +667,108 @@ HIGHLIGHT_TERM|Highlight a term (alias).|target|Executes HIGHLIGHT.
 DRAW_SHAPE|Draw a generic polygon (alias).|vertices|Executes DRAW_POLYGON.`],
 ];
 
+const DOMAIN_BY_SECTION: Readonly<Record<CapabilitySection, string>> = Object.freeze({
+  '1. Core instruction contract': 'runtime',
+  '2. Text, handwriting, and typography': 'typography',
+  '3. Mathematical writing': 'mathematics',
+  '4. Basic geometric drawing': 'geometry',
+  '5. Lines, paths, arrows, vectors': 'geometry',
+  '6. Diagram structure': 'diagramming',
+  '7. Highlights and emphasis': 'presentation',
+  '8. Visibility and reveal': 'presentation',
+  '9. Motion and transformation': 'animation',
+  '10. Drawing-specific animation': 'animation',
+  '11. Timeline and sequencing': 'timeline',
+  '12. Easing and motion feel': 'animation',
+  '13. Camera and framing': 'camera',
+  '14. Spatial relationships and layout': 'layout',
+  '15. Collision and anti-overlap': 'layout',
+  '16. Physics visuals': 'physics',
+  '17. Mathematics / graphs': 'mathematics',
+  '18. Chemistry visuals': 'chemistry',
+  '19. Biology visuals': 'biology',
+  '20. Computer science visuals': 'computer-science',
+  '21. Environment / natural effects': 'environment',
+  '22. Characters and vehicles': 'storytelling',
+  '23. 3D / spatial concepts for ManimGL': 'spatial-3d',
+  '24. Image and annotation': 'imaging',
+  '25. Assets and media': 'media',
+  '26. Interaction and user control': 'interaction',
+  '27. Special instructional transformations': 'pedagogy',
+  '28. Lesson-control semantics': 'pedagogy',
+  '29. Visual Instruction IR': 'runtime',
+  '30. Anti-overlap policy': 'layout',
+  '31. AI output constraints': 'safety',
+  '32. MVP compatibility aliases': 'compatibility',
+  '33. Electrical and embedded systems': 'embedded-systems',
+});
+
+function words(value: string): string[] {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 1);
+}
+
+function categoryFor(section: CapabilitySection): string {
+  return section
+    .replace(/^\d+\.\s*/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function buildMetadata(
+  type: string,
+  section: CapabilitySection,
+  purpose: string,
+  inputs: string,
+  notes: string,
+  implemented: boolean
+): Pick<
+  Capability,
+  'version' | 'domain' | 'category' | 'renderer' | 'implementation' | 'test' | 'example' | 'keywords'
+> {
+  const canonical = ALIASES[type] ?? type;
+  const domain = DOMAIN_BY_SECTION[section];
+  const category = categoryFor(section);
+  const implementation: CapabilityImplementationMetadata = Object.freeze({
+    status: implemented ? 'implemented' : 'documented-only',
+    file: implemented ? 'src/scene/execute.ts' : null,
+    entryPoint: implemented ? 'applyAction' : null,
+    canonicalType: canonical,
+  });
+  const test: CapabilityTestMetadata = Object.freeze({
+    status: implemented ? 'registry-covered' : 'not-implemented',
+    file: 'tests/registry.test.ts',
+  });
+  const example: CapabilityExample = Object.freeze({
+    intent: purpose.replace(/\.$/, ''),
+    action: Object.freeze({
+      type,
+      semanticRole: category,
+      parameters: Object.freeze({}),
+    }),
+  });
+  const keywords = Object.freeze(
+    Array.from(
+      new Set(words([type, canonical, section, purpose, inputs, notes, domain, category].join(' ')))
+    ).sort()
+  );
+
+  return {
+    version: VISUAL_FUNCTION_REGISTRY_VERSION,
+    domain,
+    category,
+    renderer: implemented ? 'browser-canvas' : 'none',
+    implementation,
+    test,
+    example,
+    keywords,
+  };
+}
+
 function build(): Capability[] {
   const out: Capability[] = [];
   const seen = new Set<string>();
@@ -615,15 +780,20 @@ function build(): Capability[] {
       const type = parts[0];
       if (!type || seen.has(type)) continue; // first definition wins
       seen.add(type);
-      const cap: Capability = {
+      const purpose = parts[1] ?? '';
+      const inputs = parts[2] ?? '';
+      const notes = parts[3] ?? '';
+      const implemented = IMPLEMENTED.has(type);
+      const cap: Capability = Object.freeze({
         type,
         section,
-        purpose: parts[1] ?? '',
-        inputs: parts[2] ?? '',
-        notes: parts[3] ?? '',
-        implemented: IMPLEMENTED.has(type),
-      };
-      if (ALIASES[type]) cap.aliasOf = ALIASES[type];
+        purpose,
+        inputs,
+        notes,
+        implemented,
+        ...(ALIASES[type] ? { aliasOf: ALIASES[type] } : {}),
+        ...buildMetadata(type, section, purpose, inputs, notes, implemented),
+      });
       out.push(cap);
     }
   }
@@ -661,11 +831,300 @@ export function canonicalType(type: string): string {
 export const RELATION_TYPES: readonly string[] = Object.freeze([
   'ABOVE', 'BELOW', 'LEFT_OF', 'RIGHT_OF', 'BESIDE', 'CENTERED_ON', 'ATTACHED_TO',
   'ALIGNED_WITH', 'NEAR', 'FAR', 'INSIDE', 'BETWEEN', 'ANCHOR_TO', 'FOLLOW',
+  'POINTS_TO', 'CONNECTED_TO',
 ]);
 
 export const PRIORITIES: readonly string[] = Object.freeze([
   'PRIMARY', 'SECONDARY', 'TERTIARY', 'BACKGROUND',
 ]);
+
+export interface CapabilityFilter {
+  domain?: string;
+  category?: string;
+  section?: CapabilitySection;
+  renderer?: CapabilityRenderer;
+  implemented?: boolean;
+  includeAliases?: boolean;
+}
+
+export interface CapabilitySearchOptions extends CapabilityFilter {
+  /** Maximum number of ranked matches. Defaults to 10. */
+  limit?: number;
+}
+
+export interface CapabilitySearchResult {
+  capability: Capability;
+  score: number;
+  matchedTerms: readonly string[];
+}
+
+export interface CapabilityValidationOptions {
+  /** Model-selected functions must be executable. Defaults to true. */
+  requireImplemented?: boolean;
+}
+
+export interface CapabilityValidationResult {
+  ok: boolean;
+  errors: readonly string[];
+  capability?: Capability;
+  canonicalType?: string;
+}
+
+/** Source-code-free capability description safe to include in a model prompt. */
+export interface ModelCapability {
+  name: string;
+  version: string;
+  description: string;
+  domain: string;
+  category: string;
+  parameters: {
+    type: 'semantic-object';
+    description: string;
+  };
+  output: {
+    description: string;
+  };
+  example: CapabilityExample;
+  aliasOf?: string;
+}
+
+const SEARCH_SYNONYM_GROUPS: readonly (readonly string[])[] = Object.freeze([
+  Object.freeze(['create', 'construct', 'draw', 'make', 'render', 'show', 'visualize']),
+  Object.freeze(['array', 'list', 'sequence']),
+  Object.freeze(['graph', 'plot', 'chart', 'curve', 'function']),
+  Object.freeze(['emphasize', 'focus', 'highlight', 'mark']),
+  Object.freeze(['erase', 'fade', 'hide', 'remove']),
+  Object.freeze(['move', 'shift', 'translate']),
+  Object.freeze(['handwriting', 'label', 'text', 'word', 'writing']),
+  Object.freeze(['equation', 'expression', 'formula', 'math', 'mathematical']),
+  Object.freeze(['arrow', 'direction', 'vector']),
+  Object.freeze(['camera', 'frame', 'framing', 'viewport', 'zoom']),
+  Object.freeze(['hierarchy', 'node', 'tree']),
+  Object.freeze(['atom', 'bond', 'chemical', 'chemistry', 'molecule']),
+  Object.freeze(['code', 'computer', 'programming', 'algorithm']),
+  Object.freeze(['esp32', 'embedded', 'gpio', 'microcontroller']),
+  Object.freeze(['circuit', 'electrical', 'electronics', 'resistor', 'wire']),
+  Object.freeze(['led', 'light', 'diode']),
+  Object.freeze(['box', 'rectangle', 'square']),
+  Object.freeze(['delay', 'pause', 'wait']),
+  Object.freeze(['display', 'reveal', 'show']),
+  Object.freeze(['image', 'photo', 'picture']),
+  Object.freeze(['spatial', '3d', 'three-dimensional']),
+]);
+
+const SEARCH_SYNONYMS: ReadonlyMap<string, ReadonlySet<string>> = (() => {
+  const out = new Map<string, ReadonlySet<string>>();
+  for (const group of SEARCH_SYNONYM_GROUPS) {
+    const terms = new Set(group);
+    for (const term of group) out.set(term, terms);
+  }
+  return out;
+})();
+
+const SEARCH_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'for', 'in', 'of', 'on', 'the', 'to', 'with',
+]);
+
+function normaliseCapabilityName(value: string): string {
+  return value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .toUpperCase();
+}
+
+function matchesFilter(capability: Capability, filter: CapabilityFilter): boolean {
+  if (filter.domain && capability.domain !== filter.domain) return false;
+  if (filter.category && capability.category !== filter.category) return false;
+  if (filter.section && capability.section !== filter.section) return false;
+  if (filter.renderer && capability.renderer !== filter.renderer) return false;
+  if (filter.implemented !== undefined && capability.implemented !== filter.implemented) return false;
+  if (filter.includeAliases === false && capability.aliasOf) return false;
+  return true;
+}
+
+function isParameterObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Immutable query facade over the closed catalog. It intentionally has no
+ * `register` method: runtime/model output cannot mutate the allowlist.
+ */
+export class VisualFunctionRegistry {
+  readonly version = VISUAL_FUNCTION_REGISTRY_VERSION;
+  readonly #capabilities: readonly Capability[];
+  readonly #byType: ReadonlyMap<string, Capability>;
+
+  constructor(capabilities: readonly Capability[] = CAPABILITIES) {
+    this.#capabilities = Object.freeze([...capabilities]);
+    this.#byType = new Map(capabilities.map((capability) => [capability.type, capability]));
+  }
+
+  get(name: string): Capability | undefined {
+    return this.#byType.get(normaliseCapabilityName(name));
+  }
+
+  has(name: string): boolean {
+    return this.get(name) !== undefined;
+  }
+
+  list(filter: CapabilityFilter = {}): readonly Capability[] {
+    return Object.freeze(this.#capabilities.filter((capability) => matchesFilter(capability, filter)));
+  }
+
+  search(query: string, options: CapabilitySearchOptions = {}): readonly CapabilitySearchResult[] {
+    const { limit = 10, ...filter } = options;
+    const queryTokens = Array.from(new Set(words(query))).filter(
+      (term) => !SEARCH_STOP_WORDS.has(term)
+    );
+    const normalizedQuery = normaliseCapabilityName(query);
+    const results: CapabilitySearchResult[] = [];
+
+    for (const capability of this.#capabilities) {
+      if (!matchesFilter(capability, filter)) continue;
+      const typeTokens = new Set(words(capability.type));
+      const index = new Set(capability.keywords);
+      const matched = new Set<string>();
+      let score = 0;
+
+      if (normalizedQuery && capability.type === normalizedQuery) score += 1_000;
+      else if (normalizedQuery && capability.type.includes(normalizedQuery)) score += 80;
+
+      for (const term of queryTokens) {
+        if (typeTokens.has(term)) {
+          score += 24;
+          matched.add(term);
+          continue;
+        }
+        if (index.has(term)) {
+          score += 12;
+          matched.add(term);
+          continue;
+        }
+
+        const synonyms = SEARCH_SYNONYMS.get(term);
+        if (synonyms) {
+          const synonym = Array.from(synonyms).find(
+            (candidate) => typeTokens.has(candidate) || index.has(candidate)
+          );
+          if (synonym) {
+            score += typeTokens.has(synonym) ? 10 : 5;
+            matched.add(`${term}:${synonym}`);
+            continue;
+          }
+        }
+
+        const prefix = Array.from(index).find(
+          (candidate) => candidate.startsWith(term) || term.startsWith(candidate)
+        );
+        if (prefix) {
+          score += 3;
+          matched.add(`${term}:${prefix}`);
+        }
+      }
+
+      if (score === 0) continue;
+      score += matched.size * 2;
+      if (capability.implemented) score += 1;
+      results.push({
+        capability,
+        score,
+        matchedTerms: Object.freeze(Array.from(matched).sort()),
+      });
+    }
+
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 10;
+    return Object.freeze(
+      results
+        .sort((a, b) => b.score - a.score || a.capability.type.localeCompare(b.capability.type))
+        .slice(0, boundedLimit)
+        .map((result) => Object.freeze(result))
+    );
+  }
+
+  validate(
+    candidate: unknown,
+    options: CapabilityValidationOptions = {}
+  ): CapabilityValidationResult {
+    const errors: string[] = [];
+    let rawName: unknown = candidate;
+    let parameters: unknown;
+    let parametersProvided = false;
+
+    if (isParameterObject(candidate)) {
+      rawName = candidate.type ?? candidate.name;
+      parametersProvided = Object.hasOwn(candidate, 'parameters');
+      parameters = candidate.parameters;
+    }
+
+    if (typeof rawName !== 'string' || !rawName.trim()) {
+      return Object.freeze({
+        ok: false,
+        errors: Object.freeze(['REGISTRY_INVALID_NAME: expected a non-empty capability name']),
+      });
+    }
+
+    const capability = this.get(rawName);
+    if (!capability) {
+      return Object.freeze({
+        ok: false,
+        errors: Object.freeze([
+          `REJECT_UNKNOWN_CAPABILITY: "${normaliseCapabilityName(rawName)}" is not registered`,
+        ]),
+      });
+    }
+
+    if (parametersProvided && !isParameterObject(parameters)) {
+      errors.push('REGISTRY_INVALID_PARAMETERS: parameters must be an object');
+    }
+    if ((options.requireImplemented ?? true) && !capability.implemented) {
+      errors.push(`REGISTRY_NOT_IMPLEMENTED: "${capability.type}" has no deterministic executor`);
+    }
+
+    const result: CapabilityValidationResult = {
+      ok: errors.length === 0,
+      errors: Object.freeze(errors),
+      capability,
+      canonicalType: capability.implementation.canonicalType,
+    };
+    return Object.freeze(result);
+  }
+
+  /** Only executable entries are exposed to a model for function selection. */
+  modelCatalog(filter: Omit<CapabilityFilter, 'implemented'> = {}): readonly ModelCapability[] {
+    return Object.freeze(
+      this.list({ ...filter, implemented: true }).map((capability) => {
+        const item: ModelCapability = {
+          name: capability.type,
+          version: capability.version,
+          description: capability.purpose,
+          domain: capability.domain,
+          category: capability.category,
+          parameters: Object.freeze({
+            type: 'semantic-object',
+            description: capability.inputs,
+          }),
+          output: Object.freeze({ description: capability.notes }),
+          example: capability.example,
+          ...(capability.aliasOf ? { aliasOf: capability.aliasOf } : {}),
+        };
+        return Object.freeze(item);
+      })
+    );
+  }
+}
+
+/** Shared immutable registry instance used by tools and agents. */
+export const VISUAL_FUNCTIONS = new VisualFunctionRegistry();
+
+/** Source-code-free model catalog; executable entries only. */
+export function modelCapabilityCatalog(
+  filter: Omit<CapabilityFilter, 'implemented'> = {}
+): readonly ModelCapability[] {
+  return VISUAL_FUNCTIONS.modelCatalog(filter);
+}
 
 /**
  * Compact, deterministic rendering of the drawable capabilities, grouped by
@@ -684,6 +1143,82 @@ export function capabilitySheet(): string {
     list.push(`${cap.type} — ${cap.purpose} (inputs: ${cap.inputs})`);
     bySection.set(cap.section, list);
   }
+  return Array.from(bySection.entries())
+    .map(([section, rows]) => `${section}\n${rows.map((r) => `  ${r}`).join('\n')}`)
+    .join('\n\n');
+}
+
+/**
+ * The capability sheet narrowed to a specific set of types.
+ *
+ * The composer does not need all 126 drawable capabilities described to it —
+ * the planner has already chosen which ones the lesson uses. Sending the full
+ * catalog made the composer prompt enormous, which cost latency and, on a
+ * capped budget, truncated the reply before the JSON was finished.
+ */
+export function capabilitySheetFor(types: readonly string[]): string {
+  const wanted = new Set(types.map(canonicalType));
+  const bySection = new Map<string, string[]>();
+  for (const cap of CAPABILITIES) {
+    if (!cap.implemented || !wanted.has(cap.type)) continue;
+    const list = bySection.get(cap.section) ?? [];
+    list.push(`${cap.type} - ${cap.purpose} (inputs: ${cap.inputs})`);
+    bySection.set(cap.section, list);
+  }
+  if (bySection.size === 0) return capabilitySheet();
+  return Array.from(bySection.entries())
+    .map(([section, rows]) => `${section}\n${rows.map((r) => `  ${r}`).join('\n')}`)
+    .join('\n\n');
+}
+
+/**
+ * Sections every lesson needs whatever the subject: writing, shapes, arrows,
+ * emphasis, reveal, motion, camera and lesson control.
+ */
+const CORE_SECTIONS: readonly string[] = [
+  '2. Text, handwriting, and typography',
+  '3. Mathematical writing',
+  '4. Basic geometric drawing',
+  '5. Lines, paths, arrows, vectors',
+  '7. Highlights and emphasis',
+  '8. Visibility and reveal',
+  '9. Motion and transformation',
+  '13. Camera and framing',
+  '28. Lesson-control semantics',
+];
+
+const DOMAIN_SECTION: Record<string, string> = {
+  physics: '16. Physics visuals',
+  mathematics: '17. Mathematics / graphs',
+  chemistry: '18. Chemistry visuals',
+  biology: '19. Biology visuals',
+  computer_science: '20. Computer science visuals',
+  electrical_engineering: '33. Electrical and embedded systems',
+  semiconductor: '33. Electrical and embedded systems',
+  embedded_systems: '33. Electrical and embedded systems',
+};
+
+/**
+ * The capability sheet narrowed to one subject.
+ *
+ * A chemistry lesson has no use for the sorting-visualisation capabilities, and
+ * describing all 126 of them costs tokens on every request. On a metered or
+ * free-tier key that waste is the difference between a lesson working and the
+ * reply being truncated before its JSON is finished.
+ */
+export function capabilitySheetForDomain(domain: string): string {
+  const wanted = new Set<string>(CORE_SECTIONS);
+  const specific = DOMAIN_SECTION[domain];
+  if (specific) wanted.add(specific);
+
+  const bySection = new Map<string, string[]>();
+  for (const cap of CAPABILITIES) {
+    if (!cap.implemented || !wanted.has(cap.section)) continue;
+    const list = bySection.get(cap.section) ?? [];
+    list.push(`${cap.type} - ${cap.purpose} (inputs: ${cap.inputs})`);
+    bySection.set(cap.section, list);
+  }
+  if (bySection.size === 0) return capabilitySheet();
   return Array.from(bySection.entries())
     .map(([section, rows]) => `${section}\n${rows.map((r) => `  ${r}`).join('\n')}`)
     .join('\n\n');

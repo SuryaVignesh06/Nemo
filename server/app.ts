@@ -5,26 +5,68 @@
  * a single `npm run dev`, and runnable standalone via server/standalone.ts.
  *
  * Routes:
- *   GET  /api/health    provider + voice readiness
- *   GET  /api/registry  the semantic capability catalog
- *   POST /api/lesson    SSE stream: status events, then the validated plan
- *   POST /api/solve     deterministic equation solver
- *   POST /api/voice     ElevenLabs narration audio
- *
- * API keys arrive in the request body from the browser's config panel, or from
- * the process environment. They are never echoed back and never logged.
+ *   GET  /api/health        provider + voice readiness
+ *   GET  /api/registry      the semantic capability catalog
+ *   POST /api/lesson        SSE stream: status events, then the validated plan
+ *   POST /api/solve         deterministic equation solver
+ *   POST /api/voice         ElevenLabs narration audio
+ *   POST /api/voice/voices  list available ElevenLabs voices
+ *   POST /api/voice/test    test ElevenLabs voice generation
+ *   POST /api/models        list available models with free/paid filters
+ *   POST /api/provider/health validate provider discovery credentials/reachability
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
+import { loadEnv } from './env.ts';
 import { LessonError, type LessonEvent } from '../shared/contracts.ts';
 import { CAPABILITIES, EXECUTABLE_TYPES } from '../shared/registry.ts';
+import { looksLikeEquation } from '../shared/solver.ts';
 import { buildLesson, solveOnly } from './lesson/pipeline.ts';
+import { buildFastLesson } from './lesson/fastPipeline.ts';
 import { runWorkflow } from './workflow/run.ts';
 import { ManimGLRenderer } from './rendering/manimgl.ts';
-import { resolveProviderConfig, type ProviderConfig } from './providers/index.ts';
-import { checkVoice, resolveVoiceConfig, synthesize } from './voice/index.ts';
+import {
+  createProvider,
+  resolveProviderConfig,
+  type ListModelsOptions,
+  type ModelPriceFilter,
+  type ModelSort,
+  type ProviderConfig,
+  type ProviderName,
+} from './providers/index.ts';
+import { checkVoice, fetchVoices, resolveVoiceConfig, synthesize } from './voice/index.ts';
+
+loadEnv();
+
+/**
+ * Questions the scripted demo library covers.
+ *
+ * Deliberately narrower than mockPlans' own routing. That router treats any
+ * mention of "force" or "chemistry" as a demo, which is right once Demo Mode
+ * has been chosen but wrong here: on a live provider a question about
+ * electrostatic force is a real question, not a request for the friction
+ * lesson. These patterns name the demos rather than their subjects.
+ */
+const DEMO_PATTERNS: readonly RegExp[] = [
+  /\bbinary\s*search\b/i,
+  /\besp\s*-?32\b/i,
+  /\bbenzene\b/i,
+  /\bfriction\b/i,
+  /\b(?:definite\s+)?integral\b/i,
+  /\barea\s+under\b/i,
+  /\btriangle\b/i,
+];
+
+/** True when the composer text should draw a scripted lesson instead of calling a model. */
+export function isDemoQuestion(question: string): boolean {
+  const q = question.trim();
+  if (!q) return false;
+  // A bare equation is scripted too — solved by the real solver, drawn instantly.
+  if (looksLikeEquation(q)) return true;
+  return DEMO_PATTERNS.some((re) => re.test(q));
+}
 
 /** Newest request wins: an in-flight lesson is aborted when another arrives. */
 const inFlight = new Map<string, AbortController>();
@@ -119,8 +161,6 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
   inFlight.set(sessionId, controller);
 
   const stream = new EventStream(res);
-  // The graph publishes the plan mid-flight so drawing starts early; this
-  // records it so the final send below does not replay the same lesson.
   let publishedPlan = false;
   req.on('close', () => {
     controller.abort();
@@ -136,57 +176,122 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
     const status = (stage: string, detail?: string) =>
       stream.send({ type: 'lesson.status', lessonId, stage, detail });
 
-    // The agent graph is the workflow. The original linear pipeline stays
-    // reachable via NEMO_WORKFLOW=legacy (and for the mock provider, which
-    // serves scripted plans and has no agents to run).
-    const useLegacy = process.env.NEMO_WORKFLOW === 'legacy' || cfg.provider === 'mock';
+    // Workflow selection:
+    // 1. mock provider -> deterministic offline plan
+    // 2. NEMO_WORKFLOW=langgraph -> multi-agent graph with critic and review
+    // 3. default -> Ultra-Fast Single-Pass Pipeline (< 10s)
+    let result: {
+      plan: any;
+      warnings: string[];
+      providerName: string;
+      model: string;
+    };
 
-    const result = useLegacy
-      ? await buildLesson(cfg, question, { lessonId, requestId }, {
-          status,
-          signal: controller.signal,
-        })
-      : await (async () => {
-          const r = await runWorkflow({
-            question,
-            requestId,
-            sessionId,
-            lessonId,
-            provider: cfg,
-            signal: controller.signal,
-            status,
-            // The written answer reaches the user first, like a chat reply.
-            onAnswer: (a) =>
-              stream.send({
-                type: 'lesson.answer',
-                lessonId,
-                answer: a.explanation || a.approach,
-                finalAnswer: a.finalAnswer,
-                domain: a.domain,
-              }),
-            // The board starts drawing as soon as a plan is valid, rather than
-            // waiting for an optional render-and-review pass.
-            onPlan: (plan, revision) => {
-              publishedPlan = true;
-              stream.send({ type: 'lesson.plan', lessonId, plan, revision });
-            },
-          });
-          // Surface the agent path so the developer strip can show it.
+    /*
+     * Demo keywords are served from the scripted library first.
+     *
+     * Typing "binary search" into the composer should draw immediately: the
+     * scripted lesson is deterministic, needs no API key and no model call, so
+     * it is the same every time it is shown. If the router turns out not to
+     * cover the question after all — "explain F = ma" reads like an equation
+     * but has no scripted plan — the failure is swallowed and the live
+     * pipeline runs as normal, so nothing is lost by trying.
+     */
+    let demoResult: typeof result | null = null;
+    if (cfg.provider !== 'mock' && isDemoQuestion(question)) {
+      try {
+        const demo = await buildLesson(
+          { provider: 'mock' },
+          question,
+          { lessonId, requestId },
+          { status, signal: controller.signal }
+        );
+        stream.send({
+          type: 'lesson.answer',
+          lessonId,
+          answer: demo.plan.answer,
+          definitions: [],
+          finalAnswer: demo.plan.finalSummary,
+          domain: demo.plan.domain,
+        });
+        demoResult = demo;
+      } catch {
+        // Not one of the scripted scenarios: carry on to the model.
+      }
+    }
+
+    if (demoResult) {
+      result = demoResult;
+    } else if (cfg.provider === 'mock') {
+      result = await buildLesson(cfg, question, { lessonId, requestId }, {
+        status,
+        signal: controller.signal,
+      });
+      stream.send({
+        type: 'lesson.answer',
+        lessonId,
+        answer: result.plan.answer,
+        definitions: [],
+        finalAnswer: result.plan.finalSummary,
+        domain: result.plan.domain,
+      });
+    } else if (process.env.NEMO_WORKFLOW === 'langgraph') {
+      const r = await runWorkflow({
+        question,
+        requestId,
+        sessionId,
+        lessonId,
+        provider: cfg,
+        signal: controller.signal,
+        status,
+        onAnswer: (a) =>
           stream.send({
-            type: 'lesson.status',
+            type: 'lesson.answer',
             lessonId,
-            stage: 'GRAPH',
-            detail: `${r.visited.join(' -> ')} | repairs: ${r.repairIterations}${
-              r.reviewScore === null ? '' : ` | score: ${r.reviewScore.toFixed(2)}`
-            }`,
-          });
-          return {
-            plan: r.plan,
-            warnings: r.warnings,
-            providerName: cfg.provider,
-            model: cfg.model ?? '',
-          };
-        })();
+            answer: a.explanation || a.approach,
+            finalAnswer: a.finalAnswer,
+            domain: a.domain,
+          }),
+        onPlan: (plan, revision) => {
+          publishedPlan = true;
+          stream.send({ type: 'lesson.plan', lessonId, plan, revision });
+        },
+      });
+      stream.send({
+        type: 'lesson.status',
+        lessonId,
+        stage: 'GRAPH',
+        detail: `${r.visited.join(' -> ')} | repairs: ${r.repairIterations}${
+          r.reviewScore === null ? '' : ` | score: ${r.reviewScore.toFixed(2)}`
+        }`,
+      });
+      result = {
+        plan: r.plan,
+        warnings: r.warnings,
+        providerName: cfg.provider,
+        model: cfg.model ?? '',
+      };
+    } else {
+      // Ultra-Fast Engine (<10s)
+      const fastRes = await buildFastLesson(cfg, question, { lessonId, requestId }, {
+        status,
+        signal: controller.signal,
+        onAnswer: (a) =>
+          stream.send({
+            type: 'lesson.answer',
+            lessonId,
+            answer: a.explanation,
+            definitions: a.definitions,
+            finalAnswer: a.finalAnswer,
+          }),
+      });
+      result = {
+        plan: fastRes.plan,
+        warnings: fastRes.warnings,
+        providerName: fastRes.providerName,
+        model: fastRes.model,
+      };
+    }
 
     if (controller.signal.aborted) {
       stream.send({ type: 'lesson.cancelled', lessonId });
@@ -199,12 +304,11 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
       lessonId,
       stage: 'READY',
       detail: `${result.plan.beats.length} beats, ${result.plan.beats.reduce(
-        (n, b) => n + b.visualActions.length,
+        (n: number, b: any) => n + b.visualActions.length,
         0
       )} actions`,
     });
-    // Only send here if the graph did not already publish it mid-flight;
-    // resending would restart the drawing the learner is already watching.
+
     if (!publishedPlan) {
       stream.send({ type: 'lesson.plan', lessonId, plan: result.plan });
     }
@@ -252,72 +356,139 @@ async function handleVoice(req: IncomingMessage, res: ServerResponse): Promise<v
   res.end(audio);
 }
 
+async function handleVoiceVoices(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : undefined;
+  const voices = await fetchVoices(apiKey);
+  sendJson(res, 200, { ok: true, voices });
+}
+
+async function handleVoiceTest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const cfg = resolveVoiceConfig((body.voice ?? {}) as Record<string, string>);
+  const text = 'Hello! ElevenLabs voice synthesis is connected and working.';
+  const { audio, contentType } = await synthesize(cfg, text);
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': audio.byteLength,
+    'Cache-Control': 'no-store',
+  });
+  res.end(audio);
+}
+
 async function handleHealth(res: ServerResponse): Promise<void> {
   const env = process.env;
   const voiceCfg = resolveVoiceConfig(undefined);
-  const voiceReady = await checkVoice(voiceCfg);
+  const voiceCheck = await checkVoice(voiceCfg);
+  /*
+   * The server's own choice of provider and model, so the browser can adopt it.
+   *
+   * Without this the browser kept shipping its built-in default model on every
+   * request, which silently overrode OPENROUTER_MODEL in .env — the operator
+   * configured one model and the app quietly used another.
+   */
+  const serverDefault = resolveProviderConfig(undefined);
   sendJson(res, 200, {
     ok: true,
+    defaultProvider: serverDefault.provider,
+    defaultModel: serverDefault.model ?? '',
     providers: {
-      // Only whether a key is present, never the key itself.
       zai: Boolean(env.ZAI_API_KEY),
       openrouter: Boolean(env.OPENROUTER_API_KEY),
       gemini: Boolean(env.GEMINI_API_KEY),
       mock: true,
     },
-    voice: { provider: voiceCfg.provider, configured: Boolean(voiceCfg.apiKey), reachable: voiceReady },
+    voice: {
+      provider: voiceCfg.provider,
+      configured: Boolean(voiceCfg.apiKey),
+      reachable: voiceCheck.ok,
+      message: voiceCheck.message,
+    },
     capabilities: { catalog: CAPABILITIES.length, executable: EXECUTABLE_TYPES.length },
     renderer: {
       engine: 'manimgl',
       available: await ManimGLRenderer.available(),
     },
     workflow: {
-      engine: env.NEMO_WORKFLOW === 'legacy' ? 'legacy-pipeline' : 'langgraph',
-      maxRepairIterations: Number(env.VISUAL_REPAIR_MAX_ITERATIONS ?? 2),
-      visionCritic: env.NEMO_VISION_CRITIC !== '0' && env.NEMO_VISION_CRITIC !== 'false',
+      engine: process.env.NEMO_WORKFLOW === 'langgraph' ? 'langgraph' : 'fast-single-pass',
+      fastMode: process.env.NEMO_WORKFLOW !== 'langgraph',
     },
   });
 }
 
 async function handleModels(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJson(req);
-  const provider = typeof body.provider === 'string' ? body.provider : 'openrouter';
-  const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+  const provider = parseDiscoveryProvider(body.provider);
+  const config = resolveProviderConfig(
+    {
+      provider,
+      apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+      baseUrl: provider === 'zai' && typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
+    },
+    { lockProvider: true }
+  );
+  const options = parseModelOptions(body);
+  const items = await createProvider(config).listModels(options);
+  sendJson(res, 200, { provider, models: items.map((item) => item.id), items });
+}
 
-  let models: string[] = [];
+const MODEL_FILTERS = new Set<ModelPriceFilter>(['all', 'free', 'paid']);
+const MODEL_SORTS = new Set<ModelSort>([
+  'name-asc',
+  'name-desc',
+  'context-high-to-low',
+  'context-low-to-high',
+  'pricing-low-to-high',
+  'pricing-high-to-low',
+  'newest',
+]);
 
-  if (provider === 'openrouter') {
-    try {
-      const headers: Record<string, string> = {};
-      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-      const apiRes = await fetch('https://openrouter.ai/api/v1/models', { headers });
-      if (apiRes.ok) {
-        const json = (await apiRes.json()) as { data?: Array<{ id?: string }> };
-        if (Array.isArray(json.data)) {
-          models = json.data.map((m) => m.id).filter((id): id is string => Boolean(id));
-        }
-      }
-    } catch {
-      // Fallback
-    }
-    if (models.length === 0) {
-      models = [
-        'openai/gpt-4o-mini',
-        'openai/gpt-4o',
-        'anthropic/claude-3.5-sonnet',
-        'google/gemini-2.0-flash-001',
-        'meta-llama/llama-3.3-70b-instruct',
-        'deepseek/deepseek-r1',
-        'qwen/qwen-2.5-72b-instruct',
-      ];
-    }
-  } else if (provider === 'zai') {
-    models = ['glm-4.6', 'glm-4', 'glm-4-flash', 'glm-4-plus'];
-  } else if (provider === 'gemini') {
-    models = ['gemini-2.5-flash', 'gemini-2.0-flash-001', 'gemini-1.5-pro', 'gemini-1.5-flash'];
+function parseDiscoveryProvider(value: unknown): ProviderName {
+  const provider = typeof value === 'string' ? value : 'openrouter';
+  if (provider === 'zai' || provider === 'openrouter' || provider === 'gemini' || provider === 'mock') {
+    return provider;
   }
+  throw new LessonError('UNSUPPORTED', `Unknown provider "${provider}".`);
+}
 
-  sendJson(res, 200, { models });
+function parseModelOptions(body: Record<string, unknown>): ListModelsOptions {
+  const filter = typeof body.filter === 'string' ? body.filter : 'all';
+  const sort = typeof body.sort === 'string' ? body.sort : 'name-asc';
+  if (!MODEL_FILTERS.has(filter as ModelPriceFilter)) {
+    throw new LessonError('UNSUPPORTED', `Unknown model filter "${filter}".`);
+  }
+  if (!MODEL_SORTS.has(sort as ModelSort)) {
+    throw new LessonError('UNSUPPORTED', `Unknown model sort "${sort}".`);
+  }
+  const search = typeof body.search === 'string' ? body.search.trim() : '';
+  if (search.length > 200) {
+    throw new LessonError('UNSUPPORTED', 'Model search is limited to 200 characters.');
+  }
+  return {
+    filter: filter as ModelPriceFilter,
+    sort: sort as ModelSort,
+    search,
+    timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined,
+  };
+}
+
+async function handleProviderHealth(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const provider = parseDiscoveryProvider(body.provider);
+  const config = resolveProviderConfig(
+    {
+      provider,
+      apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+      baseUrl: provider === 'zai' && typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
+    },
+    { lockProvider: true }
+  );
+  const health = await createProvider(config).healthCheck({
+    timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined,
+  });
+  sendJson(res, 200, health);
 }
 
 function handleRegistry(res: ServerResponse): void {
@@ -346,12 +517,24 @@ export async function handleApiRequest(
       await handleSolve(req, res);
       return true;
     }
+    if (req.method === 'POST' && path === '/api/voice/voices') {
+      await handleVoiceVoices(req, res);
+      return true;
+    }
+    if (req.method === 'POST' && path === '/api/voice/test') {
+      await handleVoiceTest(req, res);
+      return true;
+    }
     if (req.method === 'POST' && path === '/api/voice') {
       await handleVoice(req, res);
       return true;
     }
     if (req.method === 'POST' && path === '/api/models') {
       await handleModels(req, res);
+      return true;
+    }
+    if (req.method === 'POST' && path === '/api/provider/health') {
+      await handleProviderHealth(req, res);
       return true;
     }
     if (req.method === 'GET' && path === '/api/health') {

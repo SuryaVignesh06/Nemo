@@ -14,30 +14,13 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
+import { loadEnv } from './env.ts';
 import { handleApiRequest } from './app.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Load .env into process.env without adding a dependency. */
-async function loadEnv(): Promise<void> {
-  try {
-    const raw = await readFile(join(ROOT, '.env'), 'utf8');
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eq = trimmed.indexOf('=');
-      if (eq === -1) continue;
-      const key = trimmed.slice(0, eq).trim();
-      const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
-      if (!(key in process.env)) process.env[key] = value;
-    }
-  } catch {
-    // No .env is fine: keys can come from the browser config panel instead.
-  }
-}
-
-await loadEnv();
+loadEnv();
 
 const server = createServer(async (req, res) => {
   // The browser talks to Vite on 5173; allow it to reach this port directly.

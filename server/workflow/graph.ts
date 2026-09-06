@@ -24,7 +24,11 @@ import { END, START, StateGraph } from '@langchain/langgraph';
 
 import { LessonError } from '../../shared/contracts.ts';
 import { orderIssues, type AnswerArtifact } from '../../shared/agents.ts';
-import { runComposer, runComposerRepair } from '../agents/composer.ts';
+import {
+  runComposer,
+  runComposerRepair,
+  runVisualDesigner,
+} from '../agents/composer.ts';
 import { runCritic } from '../agents/critic.ts';
 import { runDirector } from '../agents/director.ts';
 import { runPlanner } from '../agents/planner.ts';
@@ -65,6 +69,17 @@ export interface GraphDeps extends AgentDeps {
   onPlan?(plan: LessonPlan, revision: number): void;
   /** Called as soon as a complete answer exists, before visual planning. */
   onAnswer?(answer: AnswerArtifact): void;
+  /**
+   * Merge the Visual Planner and Composer into one call, taking a lesson from
+   * four model requests to three.
+   *
+   * The separate planner produces better lessons. But on a free or metered key
+   * the binding constraint is the number of REQUESTS, not their quality — a
+   * free OpenRouter key allows roughly 50 a day, which at four calls per lesson
+   * is a dozen questions. What is traded here is planning nuance; the
+   * deterministic guarantees are identical either way.
+   */
+  economy: boolean;
 }
 
 /* ----------------------------------------------------------------- nodes */
@@ -103,6 +118,15 @@ export function buildGraph(deps: GraphDeps) {
       const teaching = requireState(state, 'teaching', 'planner');
       const visual = await runPlanner(deps, teaching);
       return { visual, status: 'DESIGNING_VISUALS', visited: ['planner'] };
+    })
+
+    // Economy path: one call answers both "what should be shown?" and "how
+    // should it be composed?", against the registry scoped to this subject.
+    .addNode('designer', async (state): Promise<NemoStateUpdate> => {
+      const teaching = requireState(state, 'teaching', 'designer');
+      const answer = requireState(state, 'answer', 'designer');
+      const composition = await runVisualDesigner(deps, teaching, answer.domain);
+      return { composition, status: 'COMPOSING', visited: ['designer'] };
     })
 
     .addNode('composer', async (state): Promise<NemoStateUpdate> => {
@@ -284,9 +308,13 @@ export function buildGraph(deps: GraphDeps) {
   graph
     .addEdge(START, 'solver')
     .addEdge('solver', 'director')
-    .addEdge('director', 'planner')
+    .addConditionalEdges('director', () => (deps.economy ? 'designer' : 'planner'), {
+      designer: 'designer',
+      planner: 'planner',
+    })
     .addEdge('planner', 'composer')
     .addEdge('composer', 'compile')
+    .addEdge('designer', 'compile')
     .addConditionalEdges('compile', (state) => routeAfterCompile(state, deps.reviewEnabled), {
       render: 'render',
       finish: 'finish',

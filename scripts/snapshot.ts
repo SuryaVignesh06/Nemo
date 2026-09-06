@@ -13,7 +13,7 @@
 
 import { SceneStore } from '../src/scene/store.ts';
 import { applyAction } from '../src/scene/execute.ts';
-import { binarySearchPlan, equationPlan, trianglePlan } from '../server/lesson/mockPlans.ts';
+import { binarySearchPlan, equationPlan, esp32LedPlan, trianglePlan } from '../server/lesson/mockPlans.ts';
 import { solveEquation } from '../shared/solver.ts';
 import { worldBounds, type LessonPlan } from '../shared/contracts.ts';
 
@@ -21,7 +21,9 @@ const VIEWPORT = { width: 1440, height: 900 };
 
 const which = process.argv[2] ?? 'binary';
 const plan: LessonPlan =
-  which === 'equation'
+  which === 'esp32'
+    ? esp32LedPlan('lesson-esp32', 'r', 'How does an ESP32 turn on an LED?')
+    : which === 'equation'
     ? equationPlan('lesson-eq', 'r', '2x + 5 = 17', solveEquation('2x + 5 = 17'))
     : which === 'triangle'
       ? trianglePlan('lesson-tri', 'r', 'Explain the area of a triangle.')

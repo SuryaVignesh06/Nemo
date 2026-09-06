@@ -90,7 +90,7 @@ export async function runSolver(deps: AgentDeps, question: string): Promise<Answ
     user: solverUser(question),
     schema: AnswerArtifactSchema,
     // Reasoning models spend most of their budget before emitting anything.
-    maxTokens: 6000,
+    maxTokens: 8000,
     temperature: 0.2,
     signal: deps.signal,
   });

@@ -20,6 +20,12 @@ export interface AgentDeps {
 export const COMMON_RULES = [
   'Rules that apply to every reply:',
   '- Reply with a single JSON object and nothing else. No prose, no code fences.',
+  // Smaller open models tend to "show their working" — checklists, tallies,
+  // per-item ticks — before the JSON. On a capped budget that working is what
+  // gets sent and the JSON is what gets truncated away.
+  '- Do NOT write notes, working, tallies, checklists or commentary before or',
+  '  after the JSON. The first character of your reply must be "{".',
+  '- Be concise. Keep every string field under 200 characters.',
   '- Never write Python, JavaScript, Manim code, or any executable source.',
   '- Never choose pixel coordinates. Position is expressed only as semantic relations.',
   '- Never invent a capability name. Use only names given to you.',

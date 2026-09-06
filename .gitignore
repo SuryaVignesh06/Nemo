@@ -28,3 +28,9 @@ dist-ssr
 media/
 plan.json
 board.png
+# Local verification scratch space (see scratch/uicheck.mjs).
+scratch/
+scratch_models.json
+__pycache__/
+*.pyc
+artifacts/

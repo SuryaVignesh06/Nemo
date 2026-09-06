@@ -245,6 +245,69 @@ describe('layout resolves collisions rather than stacking', () => {
     // must be clear. Keep this tight enough to catch a regression.
     assert.ok(overlaps <= 4, `${overlaps} overlapping pairs is too many`);
   });
+
+  test('a shove is followed through instead of landing on a third node', () => {
+    /*
+     * Three same-priority blocks placed on the same spot — what happens when a
+     * plan hangs several labels off one target. Resolving only the newest node
+     * used to clear it off one neighbour and drop it onto the other, leaving
+     * the board tangled and the failure reported as "unresolved".
+     */
+    const store = new SceneStore();
+    const block = (id: string) => ({
+      id,
+      type: 'text' as const,
+      semanticRole: 'test',
+      priority: 'PRIMARY' as const,
+      visible: true,
+      strokes: [],
+      localBounds: { w: 300, h: 60 },
+      transform: { x: 500, y: 400, scale: 1, rotation: 0 },
+      opacity: 1,
+      drawProgress: 1,
+      color: '#fff',
+    });
+
+    store.add(block('first'));
+    store.add(block('second'));
+    const report = store.add(block('third'));
+
+    assert.equal(report.unresolved.length, 0, report.unresolved.join('; '));
+    const nodes = store.list();
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        assert.ok(
+          !boundsOverlap(worldBounds(nodes[i]), worldBounds(nodes[j]), 0),
+          `${nodes[i].id} still overlaps ${nodes[j].id}`
+        );
+      }
+    }
+  });
+
+  test('the node written first keeps its place when priorities tie', () => {
+    const store = new SceneStore();
+    const block = (id: string, x: number) => ({
+      id,
+      type: 'text' as const,
+      semanticRole: 'test',
+      priority: 'PRIMARY' as const,
+      visible: true,
+      strokes: [],
+      localBounds: { w: 200, h: 50 },
+      transform: { x, y: 300, scale: 1, rotation: 0 },
+      opacity: 1,
+      drawProgress: 1,
+      color: '#fff',
+    });
+
+    store.add(block('written-first', 400));
+    const before = { ...store.get('written-first')!.transform };
+    store.add(block('written-second', 420));
+
+    const after = store.get('written-first')!.transform;
+    assert.equal(after.x, before.x, 'the earlier node should not be shifted');
+    assert.equal(after.y, before.y, 'the earlier node should not be shifted');
+  });
 });
 
 describe('domain executors execute cleanly', () => {

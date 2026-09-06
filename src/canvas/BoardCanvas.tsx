@@ -20,6 +20,7 @@ interface Props {
   /** Set while a lesson is drawing, so the pen is shown. */
   drawing: boolean;
   onManualCamera?: () => void;
+  onZoomChange?: (zoom: number) => void;
 }
 
 /** Cached per-stroke lengths so progress maths is not redone every frame. */
@@ -177,10 +178,11 @@ function paintPen(ctx: CanvasRenderingContext2D, x: number, y: number, down: boo
   ctx.restore();
 }
 
-export function BoardCanvas({ store, drawing, onManualCamera }: Props) {
+export function BoardCanvas({ store, drawing, onManualCamera, onZoomChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef(0);
   const dragRef = useRef<{ x: number; y: number; camX: number; camY: number } | null>(null);
+  const lastZoomRef = useRef(store.camera.zoom);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -202,6 +204,10 @@ export function BoardCanvas({ store, drawing, onManualCamera }: Props) {
 
     const cam = store.camera;
     const zoom = cam.zoom;
+    if (Math.abs(zoom - lastZoomRef.current) > 0.001) {
+      lastZoomRef.current = zoom;
+      onZoomChange?.(zoom);
+    }
     const offsetX = w / 2 - cam.x * zoom;
     const offsetY = h / 2 - cam.y * zoom;
 
@@ -235,7 +241,11 @@ export function BoardCanvas({ store, drawing, onManualCamera }: Props) {
     }
 
     frameRef.current = requestAnimationFrame(render);
-  }, [store, drawing]);
+  }, [store, drawing, onZoomChange]);
+
+  useEffect(() => {
+    onZoomChange?.(store.camera.zoom);
+  }, [store, onZoomChange]);
 
   useEffect(() => {
     frameRef.current = requestAnimationFrame(render);

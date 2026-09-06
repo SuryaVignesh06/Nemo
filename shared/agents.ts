@@ -30,6 +30,9 @@ export const DomainSchema = z.enum([
   'physics',
   'chemistry',
   'biology',
+  'electrical_engineering',
+  'semiconductor',
+  'embedded_systems',
   'general',
 ]);
 
@@ -58,6 +61,27 @@ export const ExecutableCapabilitySchema = z
   .refine(isKnownCapability, { message: 'not a registry capability' })
   .refine(isExecutable, { message: 'known capability but not drawable in this build' });
 
+/*
+ * Loose-scalar policy.
+ *
+ * Smaller open models routinely send `"order": "1"` for a number, a bare string
+ * where a list was expected, or `"1.5s"` for a duration. None of these are
+ * unsafe — the meaning is unambiguous — and rejecting them fails an entire
+ * lesson over punctuation. So scalars are coerced and malformed optional
+ * entries are dropped.
+ *
+ * What is deliberately NOT coerced: capability names and relation types. Those
+ * are checked against the registry, because a wrong one would reach the
+ * renderer and an invented one cannot be guessed at.
+ */
+
+/** Accepts a bare value where a list was expected, e.g. "x" for ["x"]. */
+function asArray(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (Array.isArray(value)) return value;
+  return [value];
+}
+
 /** Reject anything that smells like the model trying to emit code or pixels. */
 const SafeText = z
   .string()
@@ -69,7 +93,7 @@ const SafeText = z
 /* ------------------------------------------------------- 1. AnswerArtifact */
 
 export const SolutionStepSchema = z.object({
-  step: z.number().int().min(1),
+  step: z.coerce.number().int().min(1).catch(1),
   operation: SafeText,
   result: SafeText,
   reason: SafeText,
@@ -96,10 +120,10 @@ export const AnswerArtifactSchema = z.object({
   explanation: z.string().max(12000).default(''),
   steps: z.array(SolutionStepSchema).max(20).default([]),
   finalAnswer: SafeText,
-  keyConcepts: z.array(SafeText).max(12).default([]),
-  prerequisites: z.array(SafeText).max(8).default([]),
-  misconceptions: z.array(SafeText).max(8).default([]),
-  assumptions: z.array(SafeText).max(8).default([]),
+  keyConcepts: z.preprocess(asArray, z.array(SafeText).max(12)).default([]),
+  prerequisites: z.preprocess(asArray, z.array(SafeText).max(8)).default([]),
+  misconceptions: z.preprocess(asArray, z.array(SafeText).max(8)).default([]),
+  assumptions: z.preprocess(asArray, z.array(SafeText).max(8)).default([]),
   /** Set when the answer was produced or checked by the deterministic solver. */
   verified: z.boolean().default(false),
 });
@@ -175,15 +199,15 @@ export function assessCompleteness(a: AnswerArtifact): CompletenessVerdict {
 
 export const TeachingStepSchema = z.object({
   beatId: z.string().min(1).max(64),
-  order: z.number().int().min(1),
+  order: z.coerce.number().int().min(1).catch(1),
   objective: SafeText,
   explanation: SafeText,
   narration: SafeText,
   /** What must be true on the board before moving on. */
-  completionCriteria: z.array(SafeText).max(6).default([]),
+  completionCriteria: z.preprocess(asArray, z.array(SafeText).max(6)).default([]),
   /** Node ids from earlier beats that must stay on the board. */
-  keepVisible: z.array(z.string()).max(20).default([]),
-  emphasis: z.array(SafeText).max(6).default([]),
+  keepVisible: z.preprocess(asArray, z.array(z.string()).max(20)).default([]),
+  emphasis: z.preprocess(asArray, z.array(SafeText).max(6)).default([]),
 });
 
 /** Teaching Director output. Answers "how should this be taught?". */
@@ -218,23 +242,89 @@ export type VisualPlan = z.infer<typeof VisualPlanSchema>;
 
 /* ----------------------------------------------- 4. SceneCompositionPlan */
 
+/**
+ * Drop relations a model could not express properly, instead of failing the
+ * whole composition.
+ *
+ * The common case is the first object in a beat: there is nothing on the board
+ * to anchor it to, so the model emits `{"type":"CENTERED_ON"}` with no target,
+ * or invents a key name for it. A relation without a valid target carries no
+ * information — the layout engine already has a sensible default for an
+ * unanchored node — so discarding it loses nothing, while rejecting the reply
+ * would lose a six-beat lesson over one empty field.
+ *
+ * This is the "make weaker models useful" rule in practice: recover what is
+ * usable, refuse only what is unsafe. Unknown capability names are still a hard
+ * failure, because those cannot be recovered from.
+ */
+function dropUnusableRelations(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.filter((r) => {
+    if (!r || typeof r !== 'object') return false;
+    const rel = r as Record<string, unknown>;
+    return (
+      typeof rel.type === 'string' &&
+      RELATION_TYPES.includes(rel.type) &&
+      typeof rel.target === 'string' &&
+      rel.target.trim().length > 0
+    );
+  });
+}
+
+/**
+ * Coerce a loosely-expressed timing into the object form, or drop it.
+ *
+ * Models routinely write `"timing": "1.5s"`, `"timing": 2` or
+ * `"timing": "slow"` instead of `{duration: 1.5}`. Timing is presentational and
+ * entirely optional — the compiler has defaults for every action — so a
+ * mis-shaped value must never cost a whole composition.
+ */
+function coerceTiming(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return { duration: Math.min(Math.max(value, 0), 20) };
+  }
+
+  if (typeof value === 'string') {
+    const t = value.trim().toLowerCase();
+    if (t === 'fast' || t === 'normal' || t === 'deliberate') return { pace: t };
+    if (t === 'slow') return { pace: 'deliberate' };
+    // "1.5s", "800ms", "2 seconds"
+    const num = t.match(/([\d.]+)\s*(ms|s|sec|seconds?)?/);
+    if (num) {
+      const n = Number(num[1]);
+      if (Number.isFinite(n)) {
+        const seconds = num[2] === 'ms' ? n / 1000 : n;
+        return { duration: Math.min(Math.max(seconds, 0), 20) };
+      }
+    }
+  }
+  // Unrecognised: drop it rather than fail the reply.
+  return undefined;
+}
+
 export const ComposedActionSchema = z.object({
   actionId: z.string().min(1).max(64),
   beatId: z.string().min(1),
   type: ExecutableCapabilitySchema,
   semanticRole: SafeText,
   target: z.string().min(1).max(64).optional(),
-  relations: z.array(RelationSchema).max(6).default([]),
+  relations: z.preprocess(dropUnusableRelations, z.array(RelationSchema).max(6)).default([]),
   priority: PrioritySchema.default('SECONDARY'),
   /** Capability-specific inputs. Coordinates are stripped downstream. */
   parameters: z.record(z.string(), z.unknown()).default({}),
-  timing: z
-    .object({
-      delay: z.number().min(0).max(10).optional(),
-      duration: z.number().min(0).max(20).optional(),
-      pace: z.enum(['fast', 'normal', 'deliberate']).optional(),
-    })
-    .optional(),
+  timing: z.preprocess(
+    coerceTiming,
+    z
+      .object({
+        delay: z.coerce.number().min(0).max(10).optional(),
+        duration: z.coerce.number().min(0).max(20).optional(),
+        pace: z.enum(['fast', 'normal', 'deliberate']).optional(),
+      })
+      .optional()
+  ),
   narrationCue: SafeText.optional(),
 });
 
@@ -278,7 +368,7 @@ export const VisualIssueSchema = z.object({
   beatId: z.string().optional(),
 });
 
-const Score = z.number().min(0).max(1);
+const Score = z.coerce.number().min(0).max(1);
 
 /** Critic output. Answers "is the result good?" — and never edits the scene. */
 export const VisualReviewSchema = z.object({
@@ -321,7 +411,7 @@ export const RepairActionSchema = z.object({
   targets: z.array(z.string()).max(12).default([]),
   /** For REPOSITION: where it should go, semantically. */
   relation: RelationSchema.optional(),
-  scale: z.number().min(0.2).max(4).optional(),
+  scale: z.coerce.number().min(0.2).max(4).optional(),
   reason: SafeText,
   addressesCategory: IssueCategorySchema,
 });
@@ -341,7 +431,7 @@ export const NarrationEventSchema = z.object({
   kind: z.enum(['SPEAK', 'PAUSE', 'EMPHASIZE']),
   text: SafeText,
   /** Seconds to hold, for PAUSE. */
-  holdSeconds: z.number().min(0).max(10).optional(),
+  holdSeconds: z.coerce.number().min(0).max(10).optional(),
 });
 
 export const NarrationPlanSchema = z.object({

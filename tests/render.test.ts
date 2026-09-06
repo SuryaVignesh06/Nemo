@@ -75,6 +75,16 @@ describe('ManimGL migration', () => {
     assert.match(compiler, /_dump_bounds/);
     assert.match(compiler, /NEMO_BOUNDS/);
   });
+
+  test('the ESP32 visual-function slice has controlled ManimGL adapters', () => {
+    for (const action of [
+      'CREATE_ESP32', 'CREATE_GPIO', 'SET_GPIO_STATE', 'CREATE_RESISTOR',
+      'CREATE_LED', 'SET_LED_STATE', 'CREATE_GROUND', 'CREATE_WIRE',
+      'CREATE_CODE_BLOCK', 'HIGHLIGHT_CODE_LINE', 'SHOW_CURRENT_FLOW',
+    ]) {
+      assert.match(compiler, new RegExp(`"${action}"`), `${action} missing from compiler`);
+    }
+  });
 });
 
 /* -------------------------------------------------- measurement bridge */

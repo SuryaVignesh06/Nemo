@@ -177,6 +177,10 @@ class StageProvider implements LLMProvider {
     if (s.includes('Solver Agent')) return reply('solver', ANSWER);
     if (s.includes('Teaching Director')) return reply('director', TEACHING);
     if (s.includes('Visual Planner')) return reply('planner', VISUAL);
+    if (s.includes('Visual Designer')) {
+      this.composerCalls++;
+      return reply('designer', composition('d1'));
+    }
     if (s.includes('Visual Composer')) {
       this.composerCalls++;
       return reply(
@@ -237,6 +241,7 @@ async function run(
     renderer?: StubRenderer;
     criticEnabled?: boolean;
     reviewEnabled?: boolean;
+    economy?: boolean;
     maxIterations?: number;
   } = {}
 ) {
@@ -252,6 +257,7 @@ async function run(
     renderer,
     criticEnabled: opts.criticEnabled ?? true,
     reviewEnabled: opts.reviewEnabled ?? true,
+    economy: opts.economy ?? false,
     onPlan: (plan, revision) => published.push({ plan, revision }),
   });
 
@@ -507,5 +513,35 @@ describe('scene measurement', () => {
   test('measurement is deterministic for the same input', () => {
     const nodes = [node('a', 100, 100, 200, 100), node('b', 120, 110, 200, 100)];
     assert.deepEqual(measureScene(nodes, vp), measureScene(nodes, vp));
+  });
+});
+
+describe('graph — economy mode', () => {
+  test('merges planner and composer into one call, saving a model request', async () => {
+    const { final, provider } = await run(
+      { reviews: [review('PASS', 0.9)] },
+      { economy: true, reviewEnabled: false }
+    );
+
+    // Three model calls instead of four: the separate planner is skipped.
+    assert.deepEqual(provider.stages, ['solver', 'director', 'designer']);
+    assert.equal(provider.stages.includes('planner'), false);
+    assert.equal(provider.stages.includes('composer'), false);
+
+    assert.ok(final.visited.includes('designer'));
+    assert.equal(final.visited.includes('planner'), false);
+
+    // The lesson is still a real, validated lesson.
+    assert.equal(final.status, 'READY');
+    assert.ok(final.lessonPlan);
+    assert.ok(final.lessonPlan!.beats.length >= 4);
+  });
+
+  test('the full pipeline still runs all four agents when economy is off', async () => {
+    const { provider } = await run(
+      { reviews: [review('PASS', 0.9)] },
+      { economy: false, reviewEnabled: false }
+    );
+    assert.deepEqual(provider.stages, ['solver', 'director', 'planner', 'composer']);
   });
 });
