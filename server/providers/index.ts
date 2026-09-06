@@ -24,6 +24,12 @@ export interface ProviderConfig {
 export interface CompleteOptions {
   system: string;
   user: string;
+  /**
+   * Base64-encoded PNG frames for a vision-capable model. Used by the Visual
+   * Critic so it judges the render rather than the JSON. Providers that cannot
+   * accept images ignore these; the critic is told when no frames were sent.
+   */
+  images?: string[];
   /** Ask the provider for a JSON object when it supports the flag. */
   json?: boolean;
   maxTokens?: number;
@@ -129,11 +135,22 @@ class OpenAICompatibleProvider implements LLMProvider {
     }
 
     const executeRequest = async (includeResponseFormat: boolean): Promise<string> => {
+      // OpenAI-shaped multimodal content: a parts array instead of a string.
+      const userContent = opts.images?.length
+        ? [
+            { type: 'text', text: opts.user },
+            ...opts.images.map((b64) => ({
+              type: 'image_url',
+              image_url: { url: `data:image/png;base64,${b64}` },
+            })),
+          ]
+        : opts.user;
+
       const body: Record<string, unknown> = {
         model: this.model,
         messages: [
           { role: 'system', content: opts.system },
-          { role: 'user', content: opts.user },
+          { role: 'user', content: userContent },
         ],
         temperature: opts.temperature ?? 0.3,
         max_tokens: opts.maxTokens ?? 8000,
@@ -209,7 +226,17 @@ class GeminiProvider implements LLMProvider {
   async complete(opts: CompleteOptions): Promise<string> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
     const body: Record<string, unknown> = {
-      contents: [{ role: 'user', parts: [{ text: opts.user }] }],
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: opts.user },
+            ...(opts.images ?? []).map((b64) => ({
+              inlineData: { mimeType: 'image/png', data: b64 },
+            })),
+          ],
+        },
+      ],
       systemInstruction: { parts: [{ text: opts.system }] },
       generationConfig: {
         temperature: opts.temperature ?? 0.3,

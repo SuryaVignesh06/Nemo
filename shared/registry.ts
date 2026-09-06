@@ -666,3 +666,25 @@ export const RELATION_TYPES: readonly string[] = Object.freeze([
 export const PRIORITIES: readonly string[] = Object.freeze([
   'PRIMARY', 'SECONDARY', 'TERTIARY', 'BACKGROUND',
 ]);
+
+/**
+ * Compact, deterministic rendering of the drawable capabilities, grouped by
+ * registry section, for inclusion in an agent prompt.
+ *
+ * This is the mechanism that stops a planner hallucinating SUMMON_DRAGON: the
+ * registry answers "what can be drawn?", the model only selects from the answer.
+ * It is a pure function of the registry, so the same build always produces the
+ * same sheet.
+ */
+export function capabilitySheet(): string {
+  const bySection = new Map<string, string[]>();
+  for (const cap of CAPABILITIES) {
+    if (!cap.implemented) continue;
+    const list = bySection.get(cap.section) ?? [];
+    list.push(`${cap.type} — ${cap.purpose} (inputs: ${cap.inputs})`);
+    bySection.set(cap.section, list);
+  }
+  return Array.from(bySection.entries())
+    .map(([section, rows]) => `${section}\n${rows.map((r) => `  ${r}`).join('\n')}`)
+    .join('\n\n');
+}

@@ -8,22 +8,8 @@
  * is the thing that makes a failure impossible to debug.
  */
 
-import { CAPABILITIES, EXECUTABLE_TYPES, RELATION_TYPES } from '../../shared/registry.ts';
+import { EXECUTABLE_TYPES, RELATION_TYPES, capabilitySheet } from '../../shared/registry.ts';
 import type { QuestionAnalysis, Solution } from '../../shared/contracts.ts';
-
-/** Compact capability sheet: only what the director may actually emit. */
-function capabilitySheet(): string {
-  const bySection = new Map<string, string[]>();
-  for (const cap of CAPABILITIES) {
-    if (!cap.implemented) continue;
-    const list = bySection.get(cap.section) ?? [];
-    list.push(`${cap.type} — ${cap.purpose} (inputs: ${cap.inputs})`);
-    bySection.set(cap.section, list);
-  }
-  return Array.from(bySection.entries())
-    .map(([section, rows]) => `${section}\n${rows.map((r) => `  ${r}`).join('\n')}`)
-    .join('\n\n');
-}
 
 const NEVER_CODE = `
 HARD CONSTRAINTS — violating any of these makes your whole response invalid:
