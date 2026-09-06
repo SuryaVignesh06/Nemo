@@ -6,6 +6,7 @@
  */
 
 import { BoardCanvas } from './canvas/BoardCanvas.tsx';
+import { AnswerPanel } from './components/AnswerPanel.tsx';
 import { AskBar } from './components/AskBar.tsx';
 import { ConfigPanel } from './components/ConfigPanel.tsx';
 import { StatusStrip } from './components/StatusStrip.tsx';
@@ -31,6 +32,12 @@ export default function App() {
         voiceStatus={state.voiceStatus}
         voiceDetail={state.voiceDetail}
         hasBrowserKey={hasBrowserKey}
+      />
+
+      <AnswerPanel
+        answer={state.answer}
+        finalAnswer={state.finalAnswer}
+        question={state.question}
       />
 
       <StatusStrip

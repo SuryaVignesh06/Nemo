@@ -23,6 +23,17 @@ export type LessonStage =
   | 'SOLVING'
   | 'PLANNING'
   | 'DIRECTING'
+  // Stages emitted by the agent graph. Without these the label freezes on
+  // whatever the last recognised stage was, and the app looks hung while it
+  // is in fact still working.
+  | 'DESIGNING_VISUALS'
+  | 'COMPOSING'
+  | 'RENDERING'
+  | 'REVIEWING'
+  | 'REPAIRING'
+  | 'GRAPH'
+  | 'WARNINGS'
+  | 'READY'
   | 'VALIDATING'
   | 'DRAWING'
   | 'COMPLETED'
@@ -36,6 +47,14 @@ const STAGE_LABELS: Record<LessonStage, string> = {
   SOLVING: 'Working out the answer',
   PLANNING: 'Planning the lesson',
   DIRECTING: 'Choosing what to draw',
+  DESIGNING_VISUALS: 'Choosing what to draw',
+  COMPOSING: 'Composing the board',
+  RENDERING: 'Rendering',
+  REVIEWING: 'Checking the visualization',
+  REPAIRING: 'Fixing the visualization',
+  GRAPH: 'Working',
+  WARNINGS: 'Working',
+  READY: 'Ready',
   VALIDATING: 'Checking the visual plan',
   DRAWING: 'Drawing',
   COMPLETED: 'Completed',
@@ -48,6 +67,9 @@ export interface LessonState {
   stageLabel: string;
   detail: string;
   question: string;
+  /** The written answer, streamed before any visual work. */
+  answer: string;
+  finalAnswer: string;
   plan: LessonPlan | null;
   narration: string;
   beatIndex: number;
@@ -66,6 +88,8 @@ const INITIAL: LessonState = {
   stageLabel: '',
   detail: '',
   question: '',
+  answer: '',
+  finalAnswer: '',
   plan: null,
   narration: '',
   beatIndex: 0,
@@ -77,6 +101,15 @@ const INITIAL: LessonState = {
   voiceDetail: '',
   log: [],
 };
+
+/**
+ * How long the stream may go completely silent before the client gives up.
+ *
+ * Generous, because a real lesson legitimately spends a long time in a single
+ * model call. The point is not to be strict — it is that "forever" is never
+ * the answer, and the user gets a diagnosis instead of a spinner.
+ */
+const SILENCE_TIMEOUT_MS = 120_000;
 
 let requestCounter = 0;
 
@@ -165,6 +198,25 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
       const controller = new AbortController();
       abortRef.current = controller;
 
+      /*
+       * Watchdog.
+       *
+       * The stream had no timeout at all, so a backend that stalled — a model
+       * retrying a slow free-tier endpoint, say — left the UI spinning with no
+       * way out. Each event received resets the clock, so a lesson that is
+       * genuinely progressing is never cut off; only silence trips it.
+       */
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      let timedOut = false;
+      const resetWatchdog = () => {
+        clearTimeout(watchdog);
+        watchdog = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, SILENCE_TIMEOUT_MS);
+      };
+      resetWatchdog();
+
       let res: Response;
       try {
         res = await fetch('/api/lesson', {
@@ -210,6 +262,8 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          // Progress: the backend is alive, so restart the silence clock.
+          resetWatchdog();
           buffer += decoder.decode(value, { stream: true });
           const parts = buffer.split('\n\n');
           buffer = parts.pop() ?? '';
@@ -229,6 +283,16 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
             switch (event.type) {
               case 'lesson.started':
                 log(`lesson.started ${event.lessonId.slice(0, 8)}`);
+                break;
+              case 'lesson.answer':
+                // The written answer arrives before any drawing, so the user
+                // has something to read while the board is planned.
+                log(`lesson.answer (${event.domain})`);
+                setState((s) => ({
+                  ...s,
+                  answer: event.answer,
+                  finalAnswer: event.finalAnswer,
+                }));
                 break;
               case 'lesson.status': {
                 const stage = (event.stage as LessonStage) ?? 'PLANNING';
@@ -264,7 +328,20 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
           }
         }
       } catch (err) {
-        if (controller.signal.aborted || activeRequestRef.current !== requestId) return;
+        if (activeRequestRef.current !== requestId) return;
+        if (timedOut) {
+          setState((s) => ({
+            ...s,
+            stage: 'FAILED',
+            stageLabel: STAGE_LABELS.FAILED,
+            error:
+              `No response for ${SILENCE_TIMEOUT_MS / 1000}s. The model may be ` +
+              'slow, rate-limited, or returning nothing. Free reasoning models ' +
+              'often do — try a different model in the config panel.',
+          }));
+          return;
+        }
+        if (controller.signal.aborted) return;
         setState((s) => ({
           ...s,
           stage: 'FAILED',
@@ -272,6 +349,8 @@ export function useLesson(settings: Settings, providerPayload: Record<string, un
           error: `The lesson stream broke: ${(err as Error).message}`,
         }));
         return;
+      } finally {
+        clearTimeout(watchdog);
       }
 
       if (!plan) {

@@ -122,7 +122,15 @@ export interface Solution {
 export type LessonEvent =
   | { type: 'lesson.started'; lessonId: string; requestId: string; question: string }
   | { type: 'lesson.status'; lessonId: string; stage: string; detail?: string }
-  | { type: 'lesson.plan'; lessonId: string; plan: LessonPlan }
+  | { type: 'lesson.plan'; lessonId: string; plan: LessonPlan; revision?: number }
+  /** The complete written answer, sent before any visual work begins. */
+  | {
+      type: 'lesson.answer';
+      lessonId: string;
+      answer: string;
+      finalAnswer: string;
+      domain: string;
+    }
   | { type: 'beat.started'; lessonId: string; beatId: string; order: number; narration: string }
   | { type: 'action.started'; lessonId: string; action: VisualAction }
   | { type: 'action.completed'; lessonId: string; actionId: string }

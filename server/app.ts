@@ -119,6 +119,9 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
   inFlight.set(sessionId, controller);
 
   const stream = new EventStream(res);
+  // The graph publishes the plan mid-flight so drawing starts early; this
+  // records it so the final send below does not replay the same lesson.
+  let publishedPlan = false;
   req.on('close', () => {
     controller.abort();
     stream.close();
@@ -152,6 +155,21 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
             provider: cfg,
             signal: controller.signal,
             status,
+            // The written answer reaches the user first, like a chat reply.
+            onAnswer: (a) =>
+              stream.send({
+                type: 'lesson.answer',
+                lessonId,
+                answer: a.explanation || a.approach,
+                finalAnswer: a.finalAnswer,
+                domain: a.domain,
+              }),
+            // The board starts drawing as soon as a plan is valid, rather than
+            // waiting for an optional render-and-review pass.
+            onPlan: (plan, revision) => {
+              publishedPlan = true;
+              stream.send({ type: 'lesson.plan', lessonId, plan, revision });
+            },
           });
           // Surface the agent path so the developer strip can show it.
           stream.send({
@@ -185,7 +203,11 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
         0
       )} actions`,
     });
-    stream.send({ type: 'lesson.plan', lessonId, plan: result.plan });
+    // Only send here if the graph did not already publish it mid-flight;
+    // resending would restart the drawing the learner is already watching.
+    if (!publishedPlan) {
+      stream.send({ type: 'lesson.plan', lessonId, plan: result.plan });
+    }
     if (result.warnings.length) {
       stream.send({ type: 'lesson.status', lessonId, stage: 'WARNINGS', detail: result.warnings.join(' | ') });
     }

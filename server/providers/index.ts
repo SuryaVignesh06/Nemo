@@ -11,6 +11,7 @@
  */
 
 import { LessonError, type FailureCode } from '../../shared/contracts.ts';
+import { normalizeChatResponse, stripThinkTags, type ChatResponse } from './normalize.ts';
 
 export type ProviderName = 'zai' | 'openrouter' | 'gemini' | 'mock';
 
@@ -110,6 +111,8 @@ class OpenAICompatibleProvider implements LLMProvider {
   readonly model: string;
   private apiKey: string;
   private baseUrl: string;
+  /** Last provider stop reason, surfaced in errors so a hang names its cause. */
+  private lastFinishReason?: string;
 
   constructor(name: ProviderName, cfg: ProviderConfig) {
     this.name = name;
@@ -153,6 +156,8 @@ class OpenAICompatibleProvider implements LLMProvider {
           { role: 'user', content: userContent },
         ],
         temperature: opts.temperature ?? 0.3,
+        // Reasoning models spend tokens thinking before they emit anything, so
+        // a budget sized for a chat model yields an empty completion.
         max_tokens: opts.maxTokens ?? 8000,
         stream: false,
       };
@@ -170,40 +175,61 @@ class OpenAICompatibleProvider implements LLMProvider {
 
       if (!res.ok) throw mapHttpError(res.status, await res.text(), this.name);
 
-      const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        error?: { message?: string; code?: number };
-      };
+      const data = (await res.json()) as ChatResponse;
 
       if (data.error) {
         throw mapHttpError(400, data.error.message ?? 'Provider error', this.name);
       }
 
-      return data.choices?.[0]?.message?.content ?? '';
+      // Reasoning models leave `content` empty and put the text elsewhere;
+      // reading only `content` is what made those models look like a hang.
+      const norm = normalizeChatResponse(data);
+      this.lastFinishReason = norm.finishReason;
+
+      if (!norm.text && norm.truncated) {
+        throw new LessonError(
+          'INVALID_RESPONSE',
+          `${this.name} hit the token limit before producing any answer. ` +
+            `The model "${this.model}" spent its whole budget reasoning — raise max tokens or pick a non-reasoning model.`
+        );
+      }
+
+      if (norm.text && norm.truncated) {
+        throw new LessonError(
+          'INVALID_RESPONSE',
+          `${this.name} cut the reply off at the token limit (model "${this.model}").`,
+          [norm.text.slice(-200)]
+        );
+      }
+
+      return norm.text;
     };
+
+    // Only send response_format where the provider is known to honour it.
+    // Many open models on OpenRouter reject or silently ignore it.
+    const wantsJsonFlag = Boolean(opts.json) && this.name !== 'openrouter';
 
     let content = '';
     try {
-      content = await executeRequest(Boolean(opts.json && this.name !== 'openrouter'));
+      content = await executeRequest(wantsJsonFlag);
     } catch (err) {
-      if (this.name === 'openrouter' && opts.json) {
+      // A provider that refused the json flag is worth one plain retry.
+      if (wantsJsonFlag && err instanceof LessonError && err.code === 'INVALID_RESPONSE') {
         content = await executeRequest(false);
       } else {
         throw err;
       }
     }
 
-    if (!content.trim() && opts.json && this.name === 'openrouter') {
-      content = await executeRequest(false);
-    }
-
     if (!content.trim()) {
       throw new LessonError(
         'EMPTY_RESPONSE',
-        `${this.name} returned an empty response. Tip: Try selecting a different model in the Config Panel.`
+        `${this.name} returned no usable content for model "${this.model}"` +
+          (this.lastFinishReason ? ` (finish_reason: ${this.lastFinishReason})` : '') +
+          '. Try a different model in the Config Panel — free reasoning models often return only their reasoning.'
       );
     }
-    return content;
+    return stripThinkTags(content) || content;
   }
 }
 

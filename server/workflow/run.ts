@@ -11,7 +11,7 @@
  */
 
 import { LessonError, type LessonPlan } from '../../shared/contracts.ts';
-import type { NarrationPlan } from '../../shared/agents.ts';
+import type { AnswerArtifact, NarrationPlan } from '../../shared/agents.ts';
 import { createProvider, type ProviderConfig, type ProviderName } from '../providers/index.ts';
 import { ModelExecutionService, type RetryPolicy } from '../models/execution.ts';
 import { WorkflowTrace } from '../observability/trace.ts';
@@ -27,10 +27,25 @@ export interface RunRequest {
   provider: ProviderConfig;
   signal?: AbortSignal;
   status(stage: string, detail?: string): void;
+  /**
+   * Receives the compiled lesson the moment it is valid, before any render or
+   * review. The HTTP layer streams it straight to the board so drawing starts
+   * immediately; a later repair arrives as a higher revision.
+   */
+  onPlan?(plan: LessonPlan, revision: number): void;
+  /** Receives the complete written answer before visual planning starts. */
+  onAnswer?(answer: AnswerArtifact): void;
+  /**
+   * Render through ManimGL and run the critic/repair loop. Off by default for
+   * a live request (it costs ~20s before anything is drawn); on for demos.
+   */
+  review?: boolean;
 }
 
 export interface RunResult {
   plan: LessonPlan;
+  /** The complete written answer, independent of whether drawing succeeded. */
+  answer: AnswerArtifact | null;
   narration: NarrationPlan | null;
   warnings: string[];
   trace: WorkflowTrace;
@@ -71,6 +86,17 @@ function fallbackConfig(primary: ProviderConfig): ProviderConfig | null {
   const apiKey = keys[provider];
   if (!apiKey) return null;
   return { provider, apiKey, model: process.env.MODEL_FALLBACK_MODEL };
+}
+
+/**
+ * Whether to render and review at all on this request.
+ *
+ * Default off: the live path must put ink on the board in seconds. Set
+ * NEMO_REVIEW=1 to run the ManimGL render and critic/repair loop inline.
+ */
+function reviewDefault(): boolean {
+  const flag = process.env.NEMO_REVIEW;
+  return flag === '1' || flag === 'true';
 }
 
 /**
@@ -120,6 +146,9 @@ export async function runWorkflow(
         timeoutMs: intFromEnv('MANIMGL_TIMEOUT_MS', 240_000),
       }),
     criticEnabled: criticEnabled(req.provider),
+    reviewEnabled: req.review ?? reviewDefault(),
+    onPlan: req.onPlan,
+    onAnswer: req.onAnswer,
   });
 
   const final = (await graph.invoke({
@@ -149,6 +178,7 @@ export async function runWorkflow(
 
   return {
     plan: final.lessonPlan,
+    answer: final.answer,
     narration: final.narration,
     warnings: final.warnings,
     trace,

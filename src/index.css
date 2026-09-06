@@ -637,3 +637,89 @@ body {
     font-size: 13px;
   }
 }
+
+/* ------------------------------------------------------------ answer panel
+
+   The written answer, pinned left so it never covers the board. It is the
+   reading surface; the canvas remains the product.                          */
+
+.answer {
+  position: absolute;
+  top: 70px;
+  left: 18px;
+  z-index: 18;
+  width: min(360px, calc(100vw - 36px));
+  max-height: calc(100vh - 200px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  background: rgba(12, 12, 14, 0.82);
+  backdrop-filter: blur(10px);
+  color: #d8d5cc;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow: hidden;
+}
+
+.answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  flex: none;
+}
+
+.answer-q {
+  font-size: 12px;
+  color: #8d8b84;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.answer-toggle {
+  flex: none;
+  background: none;
+  border: none;
+  color: #79b8ff;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.answer-toggle:hover {
+  color: #a6cfff;
+}
+
+.answer-body {
+  padding: 10px 12px 14px;
+  overflow-y: auto;
+}
+
+.answer-body p {
+  margin: 0 0 10px;
+}
+
+.answer-final {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: #f4f1e8;
+}
+
+.answer-final-tag {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ffc861;
+  margin-bottom: 3px;
+}
+
+.answer--collapsed {
+  width: auto;
+}

@@ -45,6 +45,8 @@ class LessonProvider implements LLMProvider {
         domain: 'computer_science',
         normalizedQuestion: 'Explain how binary search works.',
         approach: 'Halve the search interval on each comparison.',
+        explanation:
+          'Binary search works on a sorted array. It compares the target with the middle element, and because the array is sorted, that single comparison eliminates half of the remaining candidates. Repeating this on the surviving half shrinks the search range geometrically until the target is found or the range is empty, which is why the cost is logarithmic.',
         steps: [
           { step: 1, operation: 'compare midpoint', result: 'discard half', reason: 'sorted' },
         ],
@@ -168,6 +170,7 @@ describe('end to end — LangGraph through real ManimGL', () => {
       // The real renderer: real manimgl subprocess, real ffmpeg frame capture.
       renderer: new ManimGLRenderer(),
       criticEnabled: true,
+      reviewEnabled: true,
     });
 
     const final = (await graph.invoke({

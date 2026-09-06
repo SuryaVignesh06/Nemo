@@ -147,6 +147,10 @@ async function demo(name: string): Promise<number> {
           provider: cfg,
           status: (stage, detail) => console.log(`  [${stage}] ${detail ?? ''}`),
         });
+        if (r.answer) {
+          console.log(`\n  ANSWER (${r.answer.explanation.length} chars):`);
+          console.log(`  ${r.answer.explanation.slice(0, 600)}`);
+        }
         console.log(`\n  graph: ${r.visited.join(' -> ')}`);
         console.log(`  repairs: ${r.repairIterations}`);
         if (r.reviewScore !== null) console.log(`  critic score: ${r.reviewScore.toFixed(2)}`);

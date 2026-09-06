@@ -85,6 +85,15 @@ export const AnswerArtifactSchema = z.object({
   normalizedQuestion: SafeText,
   /** Short summary of the approach. Not chain-of-thought. */
   approach: SafeText,
+  /**
+   * The complete prose explanation, as the learner would read it.
+   *
+   * This exists so the answer is a first-class product of the pipeline rather
+   * than a by-product of visual planning: it is shown in the UI immediately,
+   * and it is what the Teaching Director reads. A lesson can answer the
+   * question even if rendering later fails.
+   */
+  explanation: z.string().max(12000).default(''),
   steps: z.array(SolutionStepSchema).max(20).default([]),
   finalAnswer: SafeText,
   keyConcepts: z.array(SafeText).max(12).default([]),
@@ -96,6 +105,71 @@ export const AnswerArtifactSchema = z.object({
 });
 
 export type AnswerArtifact = z.infer<typeof AnswerArtifactSchema>;
+
+/**
+ * Verdict on whether an answer is finished.
+ *
+ * Deliberately deterministic rather than another model call: "does this stop
+ * mid-sentence" and "is there a final answer" are checkable, and paying a model
+ * to check the model is both slower and less reliable.
+ */
+export interface CompletenessVerdict {
+  complete: boolean;
+  /** Why it was judged incomplete, phrased for the continuation prompt. */
+  gaps: string[];
+}
+
+/** Text that ends mid-thought rather than concluding. */
+function endsMidThought(text: string): boolean {
+  const t = text.trimEnd();
+  if (!t) return true;
+  // A trailing conjunction, comma, or open bracket means more was coming.
+  if (/[,;:([{]$/.test(t)) return true;
+  // Ellipsis or an explicit continuation marker.
+  if (/(\.\.\.|…)$/.test(t)) return true;
+  if (/\b(continued|to be continued|and so on)\s*\.?$/i.test(t)) return true;
+
+  // The reliable signal is terminal punctuation. A conjunction list cannot
+  // work — a reply cut off at "and then we" ends in no conjunction at all,
+  // while a finished one may legitimately end at "...is a vector".
+  // Closing brackets and quotes count, as does a bare number or unit, since
+  // an answer may legitimately end "= 8/3" or "a = 2.87 m/s^2".
+  if (/[.!?:;)\]}"'’”]$/.test(t)) return false;
+  if (/[\d²³%]$/.test(t)) return false;
+  return true;
+}
+
+/**
+ * Check an answer is actually finished before any visual work begins.
+ *
+ * The failure this prevents is specific: a model that explains the first third
+ * of a question, and a lesson that then faithfully visualises only that third.
+ */
+export function assessCompleteness(a: AnswerArtifact): CompletenessVerdict {
+  const gaps: string[] = [];
+
+  if (!a.finalAnswer.trim()) {
+    gaps.push('There is no final answer or conclusion.');
+  }
+  if (!a.explanation.trim()) {
+    gaps.push('The explanation is empty.');
+  } else if (a.explanation.trim().length < 120) {
+    gaps.push('The explanation is too short to have addressed the question.');
+  } else if (endsMidThought(a.explanation)) {
+    gaps.push('The explanation stops mid-sentence and was cut off before finishing.');
+  }
+  if (a.steps.length === 0 && a.keyConcepts.length === 0) {
+    gaps.push('There are no reasoning steps and no key concepts, so nothing can be taught.');
+  }
+  for (const [i, step] of a.steps.entries()) {
+    if (!step.result.trim()) {
+      gaps.push(`Step ${i + 1} ("${step.operation}") has no result.`);
+      break;
+    }
+  }
+
+  return { complete: gaps.length === 0, gaps };
+}
 
 /* -------------------------------------------------------- 2. TeachingPlan */
 

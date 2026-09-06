@@ -23,7 +23,7 @@
 import { END, START, StateGraph } from '@langchain/langgraph';
 
 import { LessonError } from '../../shared/contracts.ts';
-import { orderIssues } from '../../shared/agents.ts';
+import { orderIssues, type AnswerArtifact } from '../../shared/agents.ts';
 import { runComposer, runComposerRepair } from '../agents/composer.ts';
 import { runCritic } from '../agents/critic.ts';
 import { runDirector } from '../agents/director.ts';
@@ -47,8 +47,24 @@ export interface RenderService {
 
 export interface GraphDeps extends AgentDeps {
   renderer: RenderService;
-  /** Skips the critic entirely when no vision-capable model is configured. */
+  /** Skips the critic model when no vision-capable model is configured. */
   criticEnabled: boolean;
+  /**
+   * Whether to render and review at all.
+   *
+   * Off for the live request path. The learner's board draws from the compiled
+   * plan the moment it exists, and making them wait ~20s for a ManimGL pass
+   * before anything appears is the difference between a teaching canvas and a
+   * video generator. The demos and CLI turn it on.
+   */
+  reviewEnabled: boolean;
+  /**
+   * Called the instant a plan compiles, before any review. This is what lets
+   * the board start drawing while the critic is still deciding.
+   */
+  onPlan?(plan: LessonPlan, revision: number): void;
+  /** Called as soon as a complete answer exists, before visual planning. */
+  onAnswer?(answer: AnswerArtifact): void;
 }
 
 /* ----------------------------------------------------------------- nodes */
@@ -70,6 +86,10 @@ export function buildGraph(deps: GraphDeps) {
 
     .addNode('solver', async (state): Promise<NemoStateUpdate> => {
       const answer = await runSolver(deps, state.question);
+      // Publish the written answer before any visual work: the learner should
+      // be reading it while the board is still being planned, and a lesson
+      // whose rendering later fails has still answered the question.
+      deps.onAnswer?.(answer);
       return { answer, status: 'SOLVING', visited: ['solver'] };
     })
 
@@ -108,6 +128,8 @@ export function buildGraph(deps: GraphDeps) {
           teaching,
           composition
         );
+        // Publish before reviewing: the board should be drawing already.
+        deps.onPlan?.(plan, state.iteration);
         return { lessonPlan: plan, warnings, status: 'VALIDATING', visited: ['compile'] };
       } catch (err) {
         // A repair that produces an invalid composition must not destroy a
@@ -265,7 +287,10 @@ export function buildGraph(deps: GraphDeps) {
     .addEdge('director', 'planner')
     .addEdge('planner', 'composer')
     .addEdge('composer', 'compile')
-    .addEdge('compile', 'render')
+    .addConditionalEdges('compile', (state) => routeAfterCompile(state, deps.reviewEnabled), {
+      render: 'render',
+      finish: 'finish',
+    })
     .addEdge('render', 'critic')
     .addConditionalEdges('critic', routeAfterCritic, {
       repair: 'repair_pass',
@@ -276,6 +301,21 @@ export function buildGraph(deps: GraphDeps) {
     .addEdge('finish', END);
 
   return graph.compile();
+}
+
+/**
+ * Render and review only when review is enabled and the budget allows.
+ *
+ * A compile that was rejected after a repair (visited compile:rejected) has
+ * already exhausted its budget and keeps the previous good plan.
+ */
+export function routeAfterCompile(
+  state: NemoStateType,
+  reviewEnabled: boolean
+): 'render' | 'finish' {
+  if (!reviewEnabled) return 'finish';
+  if (state.iteration > state.maxIterations) return 'finish';
+  return 'render';
 }
 
 /**

@@ -31,6 +31,8 @@ const ANSWER = {
   domain: 'computer_science',
   normalizedQuestion: 'Explain how binary search works.',
   approach: 'Halve the search interval each step.',
+  explanation:
+    'Binary search works on a sorted array. It compares the target with the middle element, and because the array is sorted, that single comparison eliminates half of the remaining candidates. Repeating this on the surviving half shrinks the search range geometrically until the target is found or the range is empty, which is why the cost is logarithmic.',
   steps: [{ step: 1, operation: 'compare midpoint', result: 'discard half', reason: 'sorted' }],
   finalAnswer: 'Binary search finds the target in O(log n) comparisons.',
   keyConcepts: ['sorted input', 'midpoint', 'halving'],
@@ -231,18 +233,26 @@ class StubRenderer implements RenderService {
 
 async function run(
   script: Script,
-  opts: { renderer?: StubRenderer; criticEnabled?: boolean; maxIterations?: number } = {}
+  opts: {
+    renderer?: StubRenderer;
+    criticEnabled?: boolean;
+    reviewEnabled?: boolean;
+    maxIterations?: number;
+  } = {}
 ) {
   const provider = new StageProvider(script);
   const renderer = opts.renderer ?? new StubRenderer();
   const trace = new WorkflowTrace('req-1', 'sess-1');
   const statuses: string[] = [];
+  const published: Array<{ plan: LessonPlan; revision: number }> = [];
 
   const graph = buildGraph({
     models: new ModelExecutionService({ primary: provider, trace, sleep: async () => {} }),
     status: (stage) => statuses.push(stage),
     renderer,
     criticEnabled: opts.criticEnabled ?? true,
+    reviewEnabled: opts.reviewEnabled ?? true,
+    onPlan: (plan, revision) => published.push({ plan, revision }),
   });
 
   const final = (await graph.invoke({
@@ -253,7 +263,7 @@ async function run(
     maxIterations: opts.maxIterations ?? MAX_VISUAL_REPAIR_ITERATIONS,
   })) as NemoStateType;
 
-  return { final, provider, renderer, trace, statuses };
+  return { final, provider, renderer, trace, statuses, published };
 }
 
 /* ------------------------------------------------------------ the tests */
