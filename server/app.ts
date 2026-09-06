@@ -21,6 +21,8 @@ import { randomUUID } from 'node:crypto';
 import { LessonError, type LessonEvent } from '../shared/contracts.ts';
 import { CAPABILITIES, EXECUTABLE_TYPES } from '../shared/registry.ts';
 import { buildLesson, solveOnly } from './lesson/pipeline.ts';
+import { runWorkflow } from './workflow/run.ts';
+import { ManimGLRenderer } from './rendering/manimgl.ts';
 import { resolveProviderConfig, type ProviderConfig } from './providers/index.ts';
 import { checkVoice, resolveVoiceConfig, synthesize } from './voice/index.ts';
 
@@ -128,16 +130,45 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
     if (!question) throw new LessonError('UNSUPPORTED', 'Ask a question first.');
 
     const cfg = providerFromBody(body);
-    const result = await buildLesson(
-      cfg,
-      question,
-      { lessonId, requestId },
-      {
-        status: (stage, detail) =>
-          stream.send({ type: 'lesson.status', lessonId, stage, detail }),
-        signal: controller.signal,
-      }
-    );
+    const status = (stage: string, detail?: string) =>
+      stream.send({ type: 'lesson.status', lessonId, stage, detail });
+
+    // The agent graph is the workflow. The original linear pipeline stays
+    // reachable via NEMO_WORKFLOW=legacy (and for the mock provider, which
+    // serves scripted plans and has no agents to run).
+    const useLegacy = process.env.NEMO_WORKFLOW === 'legacy' || cfg.provider === 'mock';
+
+    const result = useLegacy
+      ? await buildLesson(cfg, question, { lessonId, requestId }, {
+          status,
+          signal: controller.signal,
+        })
+      : await (async () => {
+          const r = await runWorkflow({
+            question,
+            requestId,
+            sessionId,
+            lessonId,
+            provider: cfg,
+            signal: controller.signal,
+            status,
+          });
+          // Surface the agent path so the developer strip can show it.
+          stream.send({
+            type: 'lesson.status',
+            lessonId,
+            stage: 'GRAPH',
+            detail: `${r.visited.join(' -> ')} | repairs: ${r.repairIterations}${
+              r.reviewScore === null ? '' : ` | score: ${r.reviewScore.toFixed(2)}`
+            }`,
+          });
+          return {
+            plan: r.plan,
+            warnings: r.warnings,
+            providerName: cfg.provider,
+            model: cfg.model ?? '',
+          };
+        })();
 
     if (controller.signal.aborted) {
       stream.send({ type: 'lesson.cancelled', lessonId });
@@ -214,6 +245,15 @@ async function handleHealth(res: ServerResponse): Promise<void> {
     },
     voice: { provider: voiceCfg.provider, configured: Boolean(voiceCfg.apiKey), reachable: voiceReady },
     capabilities: { catalog: CAPABILITIES.length, executable: EXECUTABLE_TYPES.length },
+    renderer: {
+      engine: 'manimgl',
+      available: await ManimGLRenderer.available(),
+    },
+    workflow: {
+      engine: env.NEMO_WORKFLOW === 'legacy' ? 'legacy-pipeline' : 'langgraph',
+      maxRepairIterations: Number(env.VISUAL_REPAIR_MAX_ITERATIONS ?? 2),
+      visionCritic: env.NEMO_VISION_CRITIC !== '0' && env.NEMO_VISION_CRITIC !== 'false',
+    },
   });
 }
 

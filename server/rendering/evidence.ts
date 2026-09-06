@@ -77,27 +77,49 @@ function insideViewport(b: Bounds, vp: Viewport): number {
 }
 
 /**
- * Measure a laid-out scene. Pure: the same nodes and viewport always produce
- * the same measurements, so a critic verdict is reproducible.
+ * A measured rectangle from whichever renderer produced the scene.
+ *
+ * ManimGL reports these from real mobject geometry after layout; the browser
+ * board derives them from placed SceneNodes. Measuring both through one type
+ * means an overlap means the same thing wherever it came from.
  */
+export interface MeasuredRect extends Bounds {
+  id: string;
+  /** Overlap with this node is intended (INSIDE, ATTACHED_TO, CENTERED_ON). */
+  attachedTo?: string;
+}
+
+/** Measure a laid-out scene expressed as SceneNodes (the browser board). */
 export function measureScene(nodes: readonly SceneNode[], viewport: Viewport): SceneMeasurements {
-  const visible = nodes.filter((n) => n.visible);
+  const rects: MeasuredRect[] = nodes
+    .filter((n) => n.visible)
+    .map((n) => ({ id: n.id, ...worldBounds(n), attachedTo: n.attachedTo }));
+  return measureRects(rects, viewport, nodes.length);
+}
+
+/**
+ * Measure raw geometry. Pure: the same rects and viewport always produce the
+ * same measurements, so a critic verdict is reproducible.
+ */
+export function measureRects(
+  visible: readonly MeasuredRect[],
+  viewport: Viewport,
+  nodeCount = visible.length
+): SceneMeasurements {
   const overlaps: OverlapFinding[] = [];
   const clipped: ClipFinding[] = [];
   const offScreen: string[] = [];
   const tooSmall: string[] = [];
 
-  for (const node of visible) {
-    const b = worldBounds(node);
-
-    if (b.w < MIN_READABLE_PX || b.h < MIN_READABLE_PX) tooSmall.push(node.id);
+  for (const b of visible) {
+    if (b.w < MIN_READABLE_PX || b.h < MIN_READABLE_PX) tooSmall.push(b.id);
 
     const inside = insideViewport(b, viewport);
     const total = area(b);
     if (total <= 0) continue;
 
     if (inside <= 0) {
-      offScreen.push(node.id);
+      offScreen.push(b.id);
       continue;
     }
     if (inside < total) {
@@ -106,36 +128,33 @@ export function measureScene(nodes: readonly SceneNode[], viewport: Viewport): S
       if (b.y < 0) edges.push('top');
       if (b.x + b.w > viewport.width) edges.push('right');
       if (b.y + b.h > viewport.height) edges.push('bottom');
-      clipped.push({ id: node.id, edges, outsideFraction: 1 - inside / total });
+      clipped.push({ id: b.id, edges, outsideFraction: 1 - inside / total });
     }
   }
 
   for (let i = 0; i < visible.length; i++) {
     for (let j = i + 1; j < visible.length; j++) {
-      const a = visible[i];
-      const c = visible[j];
+      const ba = visible[i];
+      const bc = visible[j];
 
       // Deliberate placement (INSIDE, ATTACHED_TO, CENTERED_ON) is not a defect.
-      if (a.attachedTo === c.id || c.attachedTo === a.id) continue;
-
-      const ba = worldBounds(a);
-      const bc = worldBounds(c);
+      if (ba.attachedTo === bc.id || bc.attachedTo === ba.id) continue;
       if (!boundsOverlap(ba, bc)) continue;
 
       const smaller = Math.min(area(ba), area(bc));
       if (smaller <= 0) continue;
       const coverage = overlapArea(ba, bc) / smaller;
       if (coverage >= OVERLAP_THRESHOLD) {
-        overlaps.push({ a: a.id, b: c.id, coverage: Number(coverage.toFixed(3)) });
+        overlaps.push({ a: ba.id, b: bc.id, coverage: Number(coverage.toFixed(3)) });
       }
     }
   }
 
-  const covered = visible.reduce((sum, n) => sum + insideViewport(worldBounds(n), viewport), 0);
+  const covered = visible.reduce((sum, b) => sum + insideViewport(b, viewport), 0);
   const vpArea = viewport.width * viewport.height;
 
   return {
-    nodeCount: nodes.length,
+    nodeCount,
     visibleCount: visible.length,
     viewport,
     // Worst first, so a truncated prompt still carries the important findings.

@@ -1,10 +1,15 @@
 """
-NEMO — controlled Manim / ManimGL compiler.
+NEMO — controlled ManimGL compiler.
 
-This is the ADVANCED VISUAL BACKEND, not the live presentation path. The browser
-owns the live board (that is what makes the demo feel like a teacher drawing);
-this compiler exists to render the same validated lesson plan to a Manim scene
-for offline/high-fidelity output.
+This targets 3b1b ManimGL (package `manimgl`, module `manimlib`), NOT Manim
+Community. The two are source-incompatible in ways that matter here: ManimGL
+has ShowCreation where Community has Create, and the CLI and output layout
+differ. Every API used below was checked against the installed manimlib 1.7.2.
+
+This is the authoritative renderer for the agent workflow: the Visual Critic
+judges frames captured from THIS compiler, so what the critic reviews is what
+the compiler actually produced. The browser board remains the live presentation
+path for the learner.
 
 The security property is the same on both paths and is the whole point:
 
@@ -24,23 +29,22 @@ Usage
       | python manim/extract_plan.py > plan.json
 
     # 2. render it
-    manim -qm manim/nemo_compiler.py NemoLesson
+    manimgl manim/nemo_compiler.py NemoLesson -w -l
     #    (the scene reads plan.json from the working directory,
     #     or the path in the NEMO_PLAN environment variable)
 
-Requires: Python 3.10+, `pip install manim` (Community edition) and FFmpeg.
-Manim is OPTIONAL — the browser demo does not need it.
+Requires: Python 3.10+, `pip install manimgl`, FFmpeg and working OpenGL.
+ManimGL is OPTIONAL — the browser demo does not need it.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
 from typing import Any, Callable
 
 try:
-    from manim import (  # type: ignore
+    from manimlib import (  # type: ignore
         BLUE,
         DOWN,
         GREEN,
@@ -51,16 +55,15 @@ try:
         YELLOW,
         Arrow,
         Circle,
-        Create,
         Ellipse,
         FadeIn,
         FadeOut,
         Indicate,
         Line,
-        MathTex,
         Polygon,
         Rectangle,
         Scene,
+        ShowCreation,
         Square,
         SurroundingRectangle,
         Text,
@@ -118,7 +121,7 @@ SUPPORTED = {
     "SECTION_END",
 }
 
-#: Colour words the model may use, mapped to Manim constants. A colour outside
+#: Colour words the model may use, mapped to ManimGL constants. A colour outside
 #: this table falls back to WHITE rather than being passed through.
 COLORS = {
     "white": WHITE if MANIM_AVAILABLE else None,
@@ -129,7 +132,7 @@ COLORS = {
     "green": GREEN if MANIM_AVAILABLE else None,
 }
 
-#: Semantic relations, mapped to Manim directions. The model still never gives
+#: Semantic relations, mapped to ManimGL directions. The model still never gives
 #: coordinates; placement is derived here, exactly as in the browser engine.
 DIRECTIONS = {
     "ABOVE": lambda: UP,
@@ -176,11 +179,17 @@ def _color(params: dict[str, Any], default: Any) -> Any:
     return COLORS.get(_str(params, ["color", "colour"]).lower()) or default
 
 
-@dataclass
 class BuildContext:
-    """Named nodes built so far, so later actions can refer back to them."""
+    """Named nodes built so far, so later actions can refer back to them.
 
-    nodes: dict[str, Any] = field(default_factory=dict)
+    Deliberately a plain class, not a dataclass: ManimGL loads scene files
+    through its own ModuleLoader, which leaves sys.modules[__module__] as None,
+    and dataclass field resolution dereferences that while inspecting
+    annotations. A plain __init__ sidesteps the whole interaction.
+    """
+
+    def __init__(self) -> None:
+        self.nodes: dict[str, Any] = {}
 
     def resolve(self, ref: str | None) -> Any | None:
         if not ref:
@@ -202,8 +211,8 @@ def _text(action: dict, ctx: BuildContext, size: float) -> Any:
 def _equation(action: dict, ctx: BuildContext) -> Any:
     params = action.get("parameters", {})
     body = _str(params, ["expression", "equation", "text", "answer"])
-    # MathTex compiles LaTeX, so only a plain-text rendering is used here: the
-    # model's string is content, never a command we hand to a TeX compiler.
+    # Rendered as plain Text, never Tex: the model's string is content, and
+    # handing it to a TeX compiler would make it a command.
     return Text(body, font_size=44, color=_color(params, WHITE))
 
 
@@ -350,9 +359,9 @@ def load_plan(path: str | None = None) -> dict:
 class NemoLesson(Scene):  # type: ignore[misc]
     """Renders a validated NEMO lesson plan through the controlled adapters."""
 
-    def construct(self) -> None:  # pragma: no cover - requires Manim
+    def construct(self) -> None:  # pragma: no cover - requires ManimGL
         if not MANIM_AVAILABLE:
-            raise RuntimeError("Manim is not installed. pip install manim")
+            raise RuntimeError("ManimGL is not installed. pip install manimgl")
         _register()
 
         plan = load_plan()
@@ -366,7 +375,7 @@ class NemoLesson(Scene):  # type: ignore[misc]
                 if action_type not in SUPPORTED:
                     # Refuse loudly rather than rendering something unrelated.
                     raise UnsupportedAction(
-                        f"{action_type} has no Manim adapter. "
+                        f"{action_type} has no ManimGL adapter. "
                         "Add one to ADAPTERS, or render this lesson in the browser."
                     )
 
@@ -377,7 +386,7 @@ class NemoLesson(Scene):  # type: ignore[misc]
                     self.wait(duration)
                     continue
                 if action_type == "SECTION_END" or action_type.startswith("CAMERA_"):
-                    # Framing hints: the browser board pans and zooms, a Manim
+                    # Framing hints: the browser board pans and zooms, a ManimGL
                     # render has one fixed frame, so these are intentional no-ops.
                     continue
 
@@ -388,7 +397,7 @@ class NemoLesson(Scene):  # type: ignore[misc]
                             self.play(Indicate(target, color=YELLOW), run_time=duration)
                         else:
                             self.play(
-                                Create(SurroundingRectangle(target, color=YELLOW)),
+                                ShowCreation(SurroundingRectangle(target, color=YELLOW)),
                                 run_time=duration,
                             )
                     continue
@@ -429,7 +438,7 @@ class NemoLesson(Scene):  # type: ignore[misc]
                                      "WRITE_HANDWRITING", "SHOW_FINAL_ANSWER", "SUMMARIZE"}:
                     self.play(Write(mobject), run_time=duration)
                 else:
-                    self.play(Create(mobject), run_time=duration)
+                    self.play(ShowCreation(mobject), run_time=duration)
 
                 if action_type not in {
                     "MARK_LOW",
@@ -442,6 +451,61 @@ class NemoLesson(Scene):  # type: ignore[misc]
             self.wait(0.3)
 
         self.wait(1.5)
+        self._dump_bounds(ctx)
+
+    # -------------------------------------------------------- measurement
+
+    def _dump_bounds(self, ctx: "BuildContext") -> None:  # pragma: no cover
+        """Emit the real geometry of the rendered scene for the Visual Critic.
+
+        The critic is only allowed to treat geometry as fact if the geometry was
+        measured, and this is the one place that can measure it: after layout,
+        inside the renderer that actually drew the frame.
+
+        Manim's world coordinates are centre-origin with y increasing upward.
+        They are converted here to the top-left-origin pixel space the
+        measurement code uses, so a bound means the same thing whichever
+        renderer produced it.
+        """
+        camera = self.camera
+        frame_w = camera.get_frame_width()
+        frame_h = camera.get_frame_height()
+        px_w = camera.get_pixel_width()
+        px_h = camera.get_pixel_height()
+        if not frame_w or not frame_h:
+            return
+
+        scale_x = float(px_w) / float(frame_w)
+        scale_y = float(px_h) / float(frame_h)
+        centre = camera.get_frame_center()
+
+        nodes = []
+        for node_id, mobject in ctx.nodes.items():
+            try:
+                cx, cy = mobject.get_center()[0], mobject.get_center()[1]
+                w = float(mobject.get_width())
+                h = float(mobject.get_height())
+            except Exception:
+                continue
+            # Manim works in numpy floats; json cannot serialise those.
+            nodes.append(
+                {
+                    "id": node_id,
+                    # Top-left origin, y down.
+                    "x": float(((cx - w / 2) - (centre[0] - frame_w / 2)) * scale_x),
+                    "y": float(((centre[1] + frame_h / 2) - (cy + h / 2)) * scale_y),
+                    "w": float(w * scale_x),
+                    "h": float(h * scale_y),
+                }
+            )
+
+        payload = {
+            "viewport": {"width": int(px_w), "height": int(px_h)},
+            "nodes": nodes,
+        }
+        target = os.environ.get("NEMO_BOUNDS", "bounds.json")
+        with open(target, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
 
 
 def _place(mobject: Any, action: dict, ctx: BuildContext, previous: Any | None) -> None:
@@ -468,10 +532,10 @@ if __name__ == "__main__":  # pragma: no cover
         }
     )
     print(f"plan: {len(plan.get('beats', []))} beats, {total} actions")
-    print(f"manim available: {MANIM_AVAILABLE}")
+    print(f"manimgl available: {MANIM_AVAILABLE}")
     if unsupported:
-        print("actions with no Manim adapter (render these in the browser):")
+        print("actions with no ManimGL adapter (render these in the browser):")
         for name in unsupported:
             print(f"  - {name}")
     else:
-        print("every action in this plan has a Manim adapter")
+        print("every action in this plan has a ManimGL adapter")

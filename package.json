@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "NEMO — an AI visual teacher that draws its explanations live on a black infinite canvas.",
+  "description": "NEMO \u2014 an AI visual teacher that draws its explanations live on a black infinite canvas.",
   "scripts": {
     "dev": "vite",
     "api": "node server/standalone.ts",
@@ -12,7 +12,15 @@
     "typecheck": "tsc -b --force",
     "lint": "oxlint",
     "test": "node --test tests/*.test.ts",
-    "test:browser": "node tests/browser/verify.mjs"
+    "test:browser": "node tests/browser/verify.mjs",
+    "health": "node scripts/nemo.ts health",
+    "graph": "node scripts/nemo.ts graph",
+    "demo": "node scripts/nemo.ts demo",
+    "demo:binary-search": "node scripts/nemo.ts demo binary-search",
+    "demo:integral": "node scripts/nemo.ts demo integral",
+    "demo:physics": "node scripts/nemo.ts demo physics",
+    "demo:benzene": "node scripts/nemo.ts demo benzene",
+    "test:render": "node --test tests/render.test.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
