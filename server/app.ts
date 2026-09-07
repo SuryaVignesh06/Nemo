@@ -14,6 +14,7 @@
  *   POST /api/voice/test    test ElevenLabs voice generation
  *   POST /api/models        list available models with free/paid filters
  *   POST /api/provider/health validate provider discovery credentials/reachability
+ *   POST /api/discover       Library search: books, repos, papers, docs
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -37,8 +38,19 @@ import {
   type ProviderName,
 } from './providers/index.ts';
 import { checkVoice, fetchVoices, resolveVoiceConfig, synthesize } from './voice/index.ts';
+import { discover, parseKind } from './research/discover.ts';
+import {
+  cognitiveEngine,
+  tutorMemoryGraph,
+  USER_A_PROFILE,
+  USER_B_PROFILE,
+  PersonalCognitiveGraphEngine,
+  USER_A_INITIAL_GRAPH,
+  USER_B_INITIAL_GRAPH,
+} from './personalAdapter.ts';
 
 loadEnv();
+
 
 /**
  * Questions the scripted demo library covers.
@@ -57,6 +69,9 @@ const DEMO_PATTERNS: readonly RegExp[] = [
   /\b(?:definite\s+)?integral\b/i,
   /\barea\s+under\b/i,
   /\btriangle\b/i,
+  /\bbrain\b/i,
+  /\bcerebr/i,
+  /\bneuro\b/i,
 ];
 
 /** True when the composer text should draw a scripted lesson instead of calling a model. */
@@ -66,6 +81,13 @@ export function isDemoQuestion(question: string): boolean {
   // A bare equation is scripted too — solved by the real solver, drawn instantly.
   if (looksLikeEquation(q)) return true;
   return DEMO_PATTERNS.some((re) => re.test(q));
+}
+
+export function shouldResearchQuestion(question: string): boolean {
+  const clean = question.trim().toLowerCase();
+  if (!clean || /^(hi|hello|hey|thanks|thank you|good (morning|afternoon|evening))[!. ]*$/.test(clean)) return false;
+  const meaningful = clean.split(/\s+/).filter((word) => word.replace(/[^a-z0-9]/g, '').length > 2);
+  return meaningful.length >= 2;
 }
 
 /** Newest request wins: an in-flight lesson is aborted when another arrives. */
@@ -272,10 +294,70 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
         model: cfg.model ?? '',
       };
     } else {
+      const cognitiveTurn = await cognitiveEngine.processUserMessage(question).catch(() => null);
+      const cognitiveHint = cognitiveTurn
+        ? `Strategy: ${cognitiveTurn.strategyDecision.strategy}\nTopic: ${cognitiveTurn.cognitiveState.topic}\nRationale: ${cognitiveTurn.strategyDecision.rationale}`
+        : undefined;
+
+      /*
+       * Adaptation from the previous comprehension check (brief section 35).
+       *
+       * The client sends this once, right after the learner answers, riding
+       * on the very next question. A miss asks for a slower, simpler pass; a
+       * hit permits going a little further and a little faster.
+       */
+      const comprehensionResult =
+        body.comprehensionResult && typeof body.comprehensionResult === 'object'
+          ? (body.comprehensionResult as { correct?: unknown })
+          : null;
+      const adaptHint =
+        comprehensionResult && typeof comprehensionResult.correct === 'boolean'
+          ? comprehensionResult.correct
+            ? 'The learner answered the previous quick check correctly. You may move a little faster and go slightly deeper this time.'
+            : 'The learner answered the previous quick check incorrectly. Slow down, simplify, and lead with a concrete example before the abstract explanation.'
+          : undefined;
+
+      const tutorDirectives = [cognitiveHint, adaptHint].filter(Boolean).join('\n') || undefined;
+
+      /*
+       * Context from the persistent canvas: a clicked node, a circled region,
+       * or the previous turn's Q&A. Sent by the client for every follow-up
+       * question but, until now, never read here — the answer scoped to
+       * nothing the learner had actually pointed at.
+       */
+      const canvasContext =
+        body.canvasContext && typeof body.canvasContext === 'object'
+          ? (body.canvasContext as Record<string, unknown>)
+          : null;
+      let contextNote: string | undefined;
+      if (canvasContext) {
+        const lines: string[] = [];
+        if (typeof canvasContext.previousQuestion === 'string' && canvasContext.previousQuestion) {
+          lines.push(`Previous question: ${canvasContext.previousQuestion}`);
+        }
+        if (typeof canvasContext.previousAnswer === 'string' && canvasContext.previousAnswer) {
+          lines.push(`Previous answer: ${canvasContext.previousAnswer}`);
+        }
+        if (typeof canvasContext.selectedObjectId === 'string' && canvasContext.selectedObjectId) {
+          lines.push(`The learner clicked on: ${canvasContext.selectedObjectId}`);
+        }
+        const circledLabels = Array.isArray(canvasContext.circledLabels)
+          ? canvasContext.circledLabels.filter((l): l is string => typeof l === 'string' && l.length > 0)
+          : [];
+        if (circledLabels.length > 0) {
+          lines.push(
+            `The learner circled these items on the board and is asking specifically about them: ${circledLabels.join(', ')}. Focus the answer on these.`
+          );
+        }
+        if (lines.length > 0) contextNote = lines.join('\n');
+      }
+
       // Ultra-Fast Engine (<10s)
       const fastRes = await buildFastLesson(cfg, question, { lessonId, requestId }, {
         status,
         signal: controller.signal,
+        tutorDirectives,
+        contextNote,
         onAnswer: (a) =>
           stream.send({
             type: 'lesson.answer',
@@ -283,6 +365,13 @@ async function handleLesson(req: IncomingMessage, res: ServerResponse): Promise<
             answer: a.explanation,
             definitions: a.definitions,
             finalAnswer: a.finalAnswer,
+          }),
+        onResearch: (r) =>
+          stream.send({
+            type: 'lesson.research',
+            lessonId,
+            sources: r.sources,
+            videos: r.videos,
           }),
       });
       result = {
@@ -491,11 +580,93 @@ async function handleProviderHealth(req: IncomingMessage, res: ServerResponse): 
   sendJson(res, 200, health);
 }
 
+async function handleDiscover(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const query = typeof body.query === 'string' ? body.query.trim() : '';
+  const kind = parseKind(body.kind);
+  if (!query) {
+    sendJson(res, 200, { kind, query: '', items: [] });
+    return;
+  }
+  const result = await discover(query, kind);
+  sendJson(res, 200, result);
+}
+
 function handleRegistry(res: ServerResponse): void {
   sendJson(res, 200, {
     catalog: CAPABILITIES,
     executable: EXECUTABLE_TYPES,
   });
+}
+
+/* --------------------------------------------------- personal cognitive api */
+
+async function handlePersonalState(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const activeUser = cognitiveEngine.activeUser;
+  const cognitiveState = activeUser.cognitiveState;
+  const graphNodes = cognitiveEngine.personalGraph.toJSON().nodes;
+  const curriculumOverlay = tutorMemoryGraph.getCurriculumOverlay();
+  const insights = graphNodes.map((n) => `Topic ${n.label}: Mastery ${(n.masteryScore * 100).toFixed(0)}%`);
+
+  sendJson(res, 200, {
+    userProfile: activeUser,
+    cognitiveState,
+    graphNodesCount: graphNodes.length,
+    curriculumOverlay,
+    insights,
+    availableProfiles: [
+      { id: USER_A_PROFILE.id, name: USER_A_PROFILE.name, role: 'Beginner / Visual Learner' },
+      { id: USER_B_PROFILE.id, name: USER_B_PROFILE.name, role: 'Advanced / Code Learner' },
+    ],
+  });
+}
+
+async function handlePersonalGraph(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  sendJson(res, 200, {
+    tutorMemoryGraph: tutorMemoryGraph.toJSON(),
+    curriculumOverlay: tutorMemoryGraph.getCurriculumOverlay(),
+    globalKnowledge: cognitiveEngine.globalKnowledge.getAllConcepts(),
+    personalGraph: cognitiveEngine.personalGraph.toJSON(),
+  });
+}
+
+async function handlePersonalTune(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const profileId = typeof body.profileId === 'string' ? body.profileId : USER_A_PROFILE.id;
+  if (profileId === USER_B_PROFILE.id) {
+    cognitiveEngine.setUser(USER_B_PROFILE, new PersonalCognitiveGraphEngine(USER_B_INITIAL_GRAPH));
+  } else {
+    cognitiveEngine.setUser(USER_A_PROFILE, new PersonalCognitiveGraphEngine(USER_A_INITIAL_GRAPH));
+  }
+  sendJson(res, 200, {
+    success: true,
+    userProfile: cognitiveEngine.activeUser,
+  });
+}
+
+async function handlePersonalTurn(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const question = typeof body.question === 'string' ? body.question.trim() : '';
+  if (!question) throw new LessonError('UNSUPPORTED', 'Question required');
+  const result = await cognitiveEngine.processUserMessage(question);
+  sendJson(res, 200, result);
+}
+
+async function handlePersonalCanvasAction(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const objectId = typeof body.targetNodeId === 'string' ? body.targetNodeId : 'node_1';
+  const objectKind = typeof body.objectKind === 'string' ? body.objectKind : 'FlowNode';
+  const action = (typeof body.action === 'string' ? body.action : 'CLICK') as 'CLICK' | 'CHANGE_VALUE' | 'STEP_NEXT' | 'STEP_PREV' | 'HOVER' | 'RESET';
+
+  const canvasState = await cognitiveEngine.handleCanvasAction({
+    objectId,
+    objectKind,
+    action,
+    timestamp: Date.now(),
+    payload: body.payload,
+  });
+
+  sendJson(res, 200, { success: true, canvasState });
 }
 
 /* -------------------------------------------------------------- dispatch */
@@ -509,6 +680,26 @@ export async function handleApiRequest(
   const path = url.split('?')[0];
 
   try {
+    if (req.method === 'GET' && path === '/api/personal/state') {
+      await handlePersonalState(req, res);
+      return true;
+    }
+    if (req.method === 'GET' && path === '/api/personal/graph') {
+      await handlePersonalGraph(req, res);
+      return true;
+    }
+    if (req.method === 'POST' && path === '/api/personal/tune') {
+      await handlePersonalTune(req, res);
+      return true;
+    }
+    if (req.method === 'POST' && path === '/api/personal/turn') {
+      await handlePersonalTurn(req, res);
+      return true;
+    }
+    if (req.method === 'POST' && path === '/api/personal/canvas/action') {
+      await handlePersonalCanvasAction(req, res);
+      return true;
+    }
     if (req.method === 'POST' && path === '/api/lesson') {
       await handleLesson(req, res);
       return true;
@@ -535,6 +726,10 @@ export async function handleApiRequest(
     }
     if (req.method === 'POST' && path === '/api/provider/health') {
       await handleProviderHealth(req, res);
+      return true;
+    }
+    if (req.method === 'POST' && path === '/api/discover') {
+      await handleDiscover(req, res);
       return true;
     }
     if (req.method === 'GET' && path === '/api/health') {

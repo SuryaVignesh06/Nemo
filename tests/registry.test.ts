@@ -20,10 +20,15 @@ describe('visual function registry metadata', () => {
       assert.equal(capability.test.file, 'tests/registry.test.ts');
 
       if (capability.implemented) {
-        assert.equal(capability.renderer, 'browser-canvas');
+        assert.notEqual(capability.renderer, 'none');
         assert.equal(capability.implementation.status, 'implemented');
-        assert.equal(capability.implementation.file, 'src/scene/execute.ts');
-        assert.equal(capability.implementation.entryPoint, 'applyAction');
+        if (capability.renderer === 'mermaid') {
+          assert.equal(capability.implementation.file, 'shared/visuals/mermaid.ts');
+          assert.equal(capability.implementation.entryPoint, 'mermaidPayloadFromParameters');
+        } else {
+          assert.equal(capability.implementation.file, 'src/scene/execute.ts');
+          assert.equal(capability.implementation.entryPoint, 'applyAction');
+        }
       } else {
         assert.equal(capability.renderer, 'none');
         assert.equal(capability.implementation.status, 'documented-only');

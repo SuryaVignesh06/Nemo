@@ -1,0 +1,114 @@
+/* NEMO — the motion primitives.
+ *
+ * One stylesheet for the three ported Magic UI components, so their keyframes
+ * are declared once rather than inlined per instance.
+ */
+
+/* ------------------------------------------------------------ AnimatedList */
+
+.animated-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.animated-list__item {
+  transform-origin: top center;
+  animation: animated-list-in 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes animated-list-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.92) translateY(-14px);
+    filter: blur(3px);
+  }
+  60% {
+    transform: scale(1.02) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* ------------------------------------------------------------- ShineBorder */
+
+/*
+ * The ring is the whole box with its middle masked out, which is why both
+ * masks are declared and composited with xor: the padding-box mask covers the
+ * inside, the border-box mask covers everything, and the difference is the
+ * border itself.
+ */
+.shine-border {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  border: var(--shine-width, 1px) solid transparent;
+  border-radius: var(--shine-radius, inherit);
+  background-size: 300% 300%;
+  background-position: 0 0;
+  background-repeat: no-repeat;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: shine-travel var(--shine-duration, 14s) infinite linear;
+}
+
+@keyframes shine-travel {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+/* -------------------------------------------------------------- TextAnimate */
+
+.text-animate {
+  /* The characters are inline-blocks; this keeps the line breaking normally. */
+  display: inline;
+}
+
+.text-animate__char {
+  display: inline-block;
+  white-space: pre;
+  animation: text-blur-in-up 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes text-blur-in-up {
+  0% {
+    opacity: 0;
+    transform: translateY(0.4em);
+    filter: blur(5px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animated-list__item,
+  .text-animate__char {
+    animation: none;
+  }
+
+  .shine-border {
+    animation: none;
+  }
+}

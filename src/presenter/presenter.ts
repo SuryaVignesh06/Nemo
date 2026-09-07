@@ -180,7 +180,7 @@ export class Presenter {
       }
 
       // Final framing so the finished board is fully visible.
-      const bounds = this.store.contentBounds();
+      const bounds = this.store.activeContentBounds();
       if (bounds) {
         await this.tweenCamera(cameraForBounds(bounds, this.viewport(), 100, 1.1, this.insets()), 1.0);
       }

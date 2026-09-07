@@ -506,6 +506,22 @@ describe('salvaging a damaged plan', () => {
     assert.ok(parsed.beats.length >= 2, 'the complete beats survive the truncation');
   });
 
+  it('recovers from unclosed markdown code fence and truncated field value', () => {
+    const raw =
+      '```json { "domain": "computer science", "objective": "Understand selection sort", "chatAnswer": "Selection Sort wo';
+    const parsed = extractJson(raw, true) as Record<string, unknown>;
+    assert.equal(parsed.domain, 'computer science');
+    assert.equal(parsed.chatAnswer, 'Selection Sort wo');
+  });
+
+  it('tolerates unescaped newlines and LaTeX backslashes in string literals', () => {
+    const raw =
+      '```json\n{\n  "domain": "math",\n  "explanation": "Line 1\nLine 2 with \\frac{a}{b} and \\alpha"\n}';
+    const parsed = extractJson(raw, true) as Record<string, unknown>;
+    assert.equal(parsed.domain, 'math');
+    assert.ok(typeof parsed.explanation === 'string');
+  });
+
   it('still refuses truncated JSON when repair was not asked for', () => {
     assert.throws(
       () => extractJson('{"beats":[{"beatId":"beat-1"', false),
@@ -513,3 +529,4 @@ describe('salvaging a damaged plan', () => {
     );
   });
 });
+

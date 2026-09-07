@@ -27,6 +27,9 @@
   "dependencies": {
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.14",
+    "@paper-design/shaders-react": "^0.0.61",
+    "mermaid": "^11.17.2",
+    "personal-cognitive-ai": "file:c:/Users/surya/Downloads/personal1/personal",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "zod": "^4.5.4"

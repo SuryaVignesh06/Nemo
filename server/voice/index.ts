@@ -101,9 +101,14 @@ export async function synthesize(cfg: VoiceConfig, text: string): Promise<VoiceR
 
   try {
     let res = await callTts(voiceId, cfg.modelId || DEFAULT_MODEL_ID);
+    // A voice added from ElevenLabs' shared Voice Library previews fine in
+    // their web app on the free plan, but the API itself refuses to speak it
+    // there (402) unless the account is paid. Fall back to the canonical
+    // premade voice rather than just failing — a lesson should still narrate.
+    const usedFallbackVoice = res.status === 402 && voiceId !== DEFAULT_VOICE_ID;
 
     // If model or voice was rejected, retry with canonical voice and multilingual v2 model
-    if (!res.ok && (res.status === 400 || res.status === 404 || res.status === 422)) {
+    if (!res.ok && (res.status === 400 || res.status === 404 || res.status === 422 || res.status === 402)) {
       const errText = await res.text();
       console.warn(`[nemo-voice] Initial ElevenLabs call failed (${res.status}: ${errText.slice(0, 100)}). Retrying with multilingual fallback...`);
       res = await callTts(DEFAULT_VOICE_ID, FALLBACK_MODEL_ID);
@@ -129,7 +134,18 @@ export async function synthesize(cfg: VoiceConfig, text: string): Promise<VoiceR
       if (res.status === 429) {
         throw new LessonError('RATE_LIMIT', `ElevenLabs quota or rate limit reached: ${detail}`, [detail]);
       }
+      if (res.status === 402) {
+        throw new LessonError(
+          'UNAVAILABLE',
+          'This voice was added from the ElevenLabs Voice Library — free accounts can preview those in the ElevenLabs app, but their API blocks them without a paid plan. Use a premade voice (e.g. Rachel) or one you\'ve cloned yourself instead.',
+          [detail]
+        );
+      }
       throw new LessonError('UNAVAILABLE', `ElevenLabs returned HTTP ${res.status}: ${detail}`, [detail]);
+    }
+
+    if (usedFallbackVoice && res.ok) {
+      console.warn('[nemo-voice] Voice Library voice rejected by the API (402); narrated with the default premade voice instead.');
     }
 
     const audio = Buffer.from(await res.arrayBuffer());

@@ -1,11 +1,8 @@
 /**
  * NEMO — the layers that sit over the board itself.
  *
- * Three things, and nothing else: the live caption, a failure banner, and the
- * developer log. Everything that is not a live overlay belongs in the rail.
- *
- * The caption is centred on the *canvas* region rather than the window, so it
- * tracks what is being drawn instead of sliding under the rail (section 40).
+ * Failure and developer-log overlays. VisualTopStatus is the single owner of
+ * live narration, so transcription can never be duplicated.
  */
 
 import type { LessonState } from '../hooks/useLesson.ts';
@@ -18,8 +15,6 @@ interface Props {
 
 export function StatusStrip({ state, showLog, onDemoMode }: Props) {
   if (state.stage === 'IDLE' && !state.error) return null;
-
-  const speaking = state.voiceStatus === 'speaking';
 
   return (
     <>
@@ -34,13 +29,6 @@ export function StatusStrip({ state, showLog, onDemoMode }: Props) {
               Run the scripted demo
             </button>
           )}
-        </div>
-      )}
-
-      {state.narration && (state.stage === 'DRAWING' || state.stage === 'COMPLETED') && (
-        <div className="caption">
-          {speaking && <span className="caption__live">LIVE</span>}
-          <span className="caption__text">{state.narration}</span>
         </div>
       )}
 

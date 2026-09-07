@@ -46,8 +46,15 @@ function nemoApi(): Plugin {
   };
 }
 
+import path from 'node:path';
+
 export default defineConfig({
   plugins: [react(), nemoApi()],
+  resolve: {
+    alias: {
+      '@personal': path.resolve('C:/Users/surya/Downloads/personal1/personal/index.ts'),
+    },
+  },
   server: {
     port: 5173,
     strictPort: false,

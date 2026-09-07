@@ -30,12 +30,6 @@ interface Props {
 
 const PROVIDERS: ProviderName[] = ['zai', 'openrouter', 'gemini', 'mock'];
 
-interface VoiceOption {
-  voice_id: string;
-  name: string;
-  category?: string;
-}
-
 interface ModelItem {
   id: string;
   name: string;
@@ -87,6 +81,7 @@ export function ConfigPanel({
   openRequest = 0,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -117,8 +112,7 @@ export function ConfigPanel({
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
 
-  // ElevenLabs Voice Discovery & Testing
-  const [voices, setVoices] = useState<VoiceOption[]>([]);
+  // ElevenLabs Voice Testing — the voice id itself is supplied by the user directly.
   const [testingVoice, setTestingVoice] = useState(false);
   const [voiceFeedback, setVoiceFeedback] = useState<string | null>(null);
 
@@ -177,23 +171,6 @@ export function ConfigPanel({
     };
   }, [open, liveProvider, active?.apiKey, modelFilter, modelSearch, modelSort]);
 
-  // Fetch ElevenLabs voices when config panel opens or key changes
-  useEffect(() => {
-    if (!open) return;
-    fetch('/api/voice/voices', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey: settings.elevenlabs.apiKey }),
-    })
-      .then((res) => res.json())
-      .then((data: { ok?: boolean; voices?: VoiceOption[] }) => {
-        if (Array.isArray(data.voices) && data.voices.length > 0) {
-          setVoices(data.voices);
-        }
-      })
-      .catch(() => {});
-  }, [open, settings.elevenlabs.apiKey]);
-
   const handleTestVoice = async () => {
     setTestingVoice(true);
     setVoiceFeedback(null);
@@ -234,6 +211,17 @@ export function ConfigPanel({
   const dot = isMock ? 'demo' : hasBrowserKey ? 'ok' : 'warn';
   const selectedModel = modelItems.find((item) => item.id === active?.model);
 
+  const formatModelLabel = (modelId: string) => {
+    if (!modelId) return '';
+    const last = modelId.split('/').pop() || modelId;
+    const clean = last.replace(/:(free|latest|preview|default)$/i, '');
+    if (clean.includes('ling-3.0')) return 'ling-3.0';
+    if (clean.includes('gpt-4o-mini')) return 'gpt-4o-mini';
+    if (clean.includes('glm-4')) return 'glm-4.6';
+    if (clean.includes('gemini-2.5')) return 'gemini-2.5';
+    return clean.length > 10 ? `${clean.slice(0, 9)}…` : clean;
+  };
+
   return (
     <div className="config" ref={ref}>
       <button
@@ -244,7 +232,7 @@ export function ConfigPanel({
       >
         <span className={`config__dot config__dot--${dot}`} aria-hidden />
         <span className="config__name">{PROVIDER_LABELS[settings.provider]}</span>
-        <span className="config__model">{isMock ? 'scripted' : active!.model}</span>
+        <span className="config__model">{isMock ? 'scripted' : formatModelLabel(active!.model)}</span>
         <span className={`config__voice config__voice--${voiceStatus}`}>
           {voiceStatus === 'unavailable'
             ? 'VOICE UNAVAILABLE'
@@ -280,19 +268,45 @@ export function ConfigPanel({
           ) : (
             <>
               <div className="config__row">
-                <label className="config__label" htmlFor="cfg-key">
-                  API key
-                </label>
-                <input
-                  id="cfg-key"
-                  className="config__input"
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder={`${PROVIDER_LABELS[settings.provider]} API key`}
-                  value={active!.apiKey}
-                  onChange={(e) => updateProvider(liveProvider!, { apiKey: e.target.value })}
-                />
+                <div className="config__key-header">
+                  <label className="config__label" htmlFor="cfg-key">
+                    API Key
+                  </label>
+                  <span className={`config__key-status ${active!.apiKey ? 'is-injected' : ''}`}>
+                    {active!.apiKey ? '● Injected & Active' : '○ Missing Key'}
+                  </span>
+                </div>
+                <div className="config__key-wrap">
+                  <input
+                    id="cfg-key"
+                    className="config__input config__input--key"
+                    type={showKey ? 'text' : 'password'}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={`Paste ${PROVIDER_LABELS[settings.provider]} API key...`}
+                    value={active!.apiKey}
+                    onChange={(e) => updateProvider(liveProvider!, { apiKey: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="config__key-toggle"
+                    onClick={() => setShowKey((s) => !s)}
+                    title={showKey ? 'Hide key' : 'Show key'}
+                    aria-label={showKey ? 'Hide key' : 'Show key'}
+                  >
+                    {showKey ? (
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                        <line x1="1" y1="1" x2="23" y2="23" strokeLinecap="round" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Model Filters (All / Free / Paid) */}
@@ -491,31 +505,16 @@ export function ConfigPanel({
 
           <div className="config__row">
             <label className="config__label" htmlFor="cfg-11-voice">
-              Voice ({voices.length > 0 ? `${voices.length} account voices found` : 'Default: Rachel'})
+              Voice ID
             </label>
-            {voices.length > 0 ? (
-              <select
-                id="cfg-11-voice"
-                className="config__input config__select"
-                value={settings.elevenlabs.voiceId}
-                onChange={(e) => updateVoice({ voiceId: e.target.value })}
-              >
-                {voices.map((v) => (
-                  <option key={v.voice_id} value={v.voice_id}>
-                    {v.name} ({v.category ?? 'voice'})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                id="cfg-11-voice"
-                className="config__input"
-                spellCheck={false}
-                placeholder="21m00Tcm4TlvDq8ikWAM (Rachel)"
-                value={settings.elevenlabs.voiceId}
-                onChange={(e) => updateVoice({ voiceId: e.target.value })}
-              />
-            )}
+            <input
+              id="cfg-11-voice"
+              className="config__input"
+              spellCheck={false}
+              placeholder="Paste your ElevenLabs voice ID"
+              value={settings.elevenlabs.voiceId}
+              onChange={(e) => updateVoice({ voiceId: e.target.value })}
+            />
           </div>
 
           <div className="config__row">

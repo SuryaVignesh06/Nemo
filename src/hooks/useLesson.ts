@@ -10,7 +10,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { LessonEvent, LessonPlan } from '../../shared/contracts.ts';
+import type {
+  ComprehensionCheck,
+  LessonEvent,
+  LessonPlan,
+  SourceRef,
+  VideoRef,
+} from '../../shared/contracts.ts';
 import { SceneStore, type ViewportInsets } from '../scene/store.ts';
 import { Presenter, type ActionRecord, type PresenterProgress } from '../presenter/presenter.ts';
 import { VoiceController, type VoiceStatus } from '../presenter/voice.ts';
@@ -20,6 +26,7 @@ export type LessonStage =
   | 'IDLE'
   | 'CONNECTING'
   | 'ANALYZING'
+  | 'RESEARCHING'
   | 'SOLVING'
   | 'PLANNING'
   | 'DIRECTING'
@@ -44,6 +51,7 @@ const STAGE_LABELS: Record<LessonStage, string> = {
   IDLE: '',
   CONNECTING: 'Connecting',
   ANALYZING: 'Reading the question',
+  RESEARCHING: 'Searching the web',
   SOLVING: 'Working out the answer',
   PLANNING: 'Planning the lesson',
   DIRECTING: 'Choosing what to draw',
@@ -74,6 +82,21 @@ export interface LessonState {
   question: string;
   /** The written answer, streamed before any visual work. */
   answer: string;
+  /** The same answer in a few plain sentences — what the chat page shows. */
+  chatAnswer: string;
+  /** Pages the research step read before the lesson was written. */
+  sources: SourceRef[];
+  /** Videos found for the same question. */
+  videos: VideoRef[];
+  /**
+   * What the agent has done so far, oldest first.
+   *
+   * Distinct from `log`, which is a developer trace of every event: this is
+   * the readable version — one line per stage the learner could care about —
+   * and it is what the process disclosure and the thinking list are built
+   * from.
+   */
+  steps: ProcessStep[];
   finalAnswer: string;
   definitions: DefinitionItem[];
   plan: LessonPlan | null;
@@ -89,6 +112,18 @@ export interface LessonState {
   voiceDetail: string;
   /** Newest first, capped: shown in the developer strip. */
   log: string[];
+  /** Set once the lesson finishes drawing, if the model produced one. */
+  pendingCheck: ComprehensionCheck | null;
+  /** What the learner picked for `pendingCheck`, once answered. */
+  checkResult: { optionId: string; correct: boolean } | null;
+}
+
+/** One readable line of the agent's progress. */
+export interface ProcessStep {
+  stage: string;
+  label: string;
+  detail: string;
+  at: number;
 }
 
 const INITIAL: LessonState = {
@@ -97,6 +132,10 @@ const INITIAL: LessonState = {
   detail: '',
   question: '',
   answer: '',
+  chatAnswer: '',
+  sources: [],
+  videos: [],
+  steps: [],
   finalAnswer: '',
   definitions: [],
   plan: null,
@@ -110,6 +149,8 @@ const INITIAL: LessonState = {
   voiceStatus: 'disabled',
   voiceDetail: '',
   log: [],
+  pendingCheck: null,
+  checkResult: null,
 };
 
 /**
@@ -121,10 +162,17 @@ const INITIAL: LessonState = {
  */
 const SILENCE_TIMEOUT_MS = 120_000;
 
+/** Replaces the last step when the stage has not changed, appends when it has. */
+function appendStep(steps: ProcessStep[], next: ProcessStep): ProcessStep[] {
+  const last = steps[steps.length - 1];
+  if (last && last.stage === next.stage) return [...steps.slice(0, -1), next];
+  return [...steps, next];
+}
+
 let requestCounter = 0;
 
-function makeSessionId(): string {
-  return `s-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+function makeSessionId(scope: 'chat' | 'visual'): string {
+  return `${scope}-s-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 }
 
 export function useLesson(
@@ -140,16 +188,24 @@ export function useLesson(
     bottom: 60,
     left: 60,
     right: 60,
-  })
+  }),
+  scope: 'chat' | 'visual' = 'chat'
 ) {
   const [state, setState] = useState<LessonState>(INITIAL);
   const store = useMemo(() => new SceneStore(), []);
-  const [sessionId, setSessionId] = useState(makeSessionId);
+  const [sessionId, setSessionId] = useState(() => makeSessionId(scope));
 
   const abortRef = useRef<AbortController | null>(null);
   const presenterRef = useRef<Presenter | null>(null);
   const activeRequestRef = useRef<string>('');
   const manualCameraRef = useRef(false);
+  const stateRef = useRef(state);
+  /** How the learner did on the last comprehension check, sent once then cleared. */
+  const lastComprehensionResultRef = useRef<{ correct: boolean } | null>(null);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const [voiceController] = useState(
     () =>
@@ -186,10 +242,13 @@ export function useLesson(
     setState((s) => ({ ...s, log: [line, ...s.log].slice(0, 60) }));
   }, []);
 
-  const viewport = useCallback(
-    () => ({ width: window.innerWidth, height: window.innerHeight }),
-    []
-  );
+  const viewport = useCallback(() => {
+    const el = typeof document !== 'undefined' ? (document.querySelector('.canvas-stage') as HTMLElement | null) : null;
+    return {
+      width: el?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 1280),
+      height: el?.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 720),
+    };
+  }, []);
 
   // Read at the moment of each camera move: a rail that appears part-way
   // through the lesson must be avoided by everything drawn after it.
@@ -208,11 +267,11 @@ export function useLesson(
     manualCameraRef.current = false;
     store.clear();
     voiceRef.current?.reset();
-    const nextSessionId = makeSessionId();
+    const nextSessionId = makeSessionId(scope);
     setSessionId(nextSessionId);
     setState(INITIAL);
     return nextSessionId;
-  }, [cancel, store]);
+  }, [cancel, scope, store]);
 
   const ask = useCallback(
     async (question: string, sessionOverride?: string) => {
@@ -225,9 +284,19 @@ export function useLesson(
       activeRequestRef.current = requestId;
       manualCameraRef.current = false;
 
-      // A fresh question starts a fresh board: never leave the previous
-      // lesson's drawing behind for the new one to be confused with.
-      store.clear();
+      const previous = stateRef.current;
+      const selectedObjectId = store.selectedObjectId;
+      const circledLabels = store.selectedRegion?.nodeIds.length
+        ? store.selectedRegion.nodeIds
+        : undefined;
+      const continuingCanvas = scope === 'visual' && store.list().length > 0;
+      const comprehensionResult = lastComprehensionResultRef.current ?? undefined;
+      lastComprehensionResultRef.current = null;
+
+      // Chat requests are isolated turns. Visual follow-ups keep the infinite
+      // board and begin in a clean neighbouring region instead of deleting it.
+      if (continuingCanvas) store.beginSection();
+      else store.clear();
       voiceRef.current?.reset();
 
       setState({
@@ -270,6 +339,17 @@ export function useLesson(
             sessionId: sessionOverride ?? sessionId,
             requestId,
             provider: providerPayload,
+            ...(continuingCanvas
+              ? {
+                  canvasContext: {
+                    previousQuestion: previous.question.slice(0, 500),
+                    previousAnswer: (previous.finalAnswer || previous.answer).slice(0, 1400),
+                    selectedObjectId,
+                    circledLabels,
+                  },
+                }
+              : {}),
+            ...(comprehensionResult ? { comprehensionResult } : {}),
           }),
           signal: controller.signal,
         });
@@ -333,9 +413,18 @@ export function useLesson(
                 setState((s) => ({
                   ...s,
                   answer: event.answer,
+                  chatAnswer: (event as { chatAnswer?: string }).chatAnswer?.trim() || s.chatAnswer,
                   finalAnswer: event.finalAnswer,
                   definitions: rawDefs,
                 }));
+                break;
+              }
+              case 'lesson.research': {
+                const research = event as unknown as { sources?: SourceRef[]; videos?: VideoRef[] };
+                const sources = research.sources ?? [];
+                const videos = research.videos ?? [];
+                log(`research: ${sources.length} sources, ${videos.length} videos`);
+                setState((s) => ({ ...s, sources, videos }));
                 break;
               }
               case 'lesson.status': {
@@ -346,6 +435,16 @@ export function useLesson(
                   stage: STAGE_LABELS[stage] ? stage : s.stage,
                   stageLabel: STAGE_LABELS[stage] ?? s.stageLabel,
                   detail: event.detail ?? '',
+                  /* One step per stage, not one per status event: the writing
+                     stage alone reports its character count every few hundred
+                     characters, and a list that repeats the same line twelve
+                     times says less than one line that updates. */
+                  steps: appendStep(s.steps, {
+                    stage,
+                    label: STAGE_LABELS[stage] ?? stage,
+                    detail: event.detail ?? '',
+                    at: Date.now(),
+                  }),
                 }));
                 break;
               }
@@ -449,7 +548,13 @@ export function useLesson(
             setState((s) =>
               activeRequestRef.current !== requestId
                 ? s
-                : { ...s, stage: 'COMPLETED', stageLabel: STAGE_LABELS.COMPLETED, narration: summary }
+                : {
+                    ...s,
+                    stage: 'COMPLETED',
+                    stageLabel: STAGE_LABELS.COMPLETED,
+                    narration: summary,
+                    pendingCheck: plan?.comprehensionCheck ?? null,
+                  }
             ),
           onFailed: (message) =>
             setState((s) =>
@@ -464,12 +569,39 @@ export function useLesson(
       presenterRef.current = presenter;
       await presenter.play(plan);
     },
-    [cancel, insets, log, providerPayload, sessionId, settings.voiceEnabled, store, viewport]
+    [cancel, insets, log, providerPayload, scope, sessionId, settings.voiceEnabled, store, viewport]
   );
 
   const onManualCamera = useCallback(() => {
     manualCameraRef.current = true;
   }, []);
+
+  const speak = useCallback((text: string) => voiceRef.current?.speak(text) ?? Promise.resolve(), []);
+  const stopSpeaking = useCallback(() => voiceRef.current?.stop(), []);
+
+  /**
+   * Record the learner's pick for the current comprehension check.
+   *
+   * Nothing is sent immediately — the result rides along with the NEXT
+   * question so the next lesson can be taught a little differently, per
+   * brief section 35 (adapt, don't gate).
+   */
+  const answerCheck = useCallback((optionId: string) => {
+    setState((s) => {
+      if (!s.pendingCheck || s.checkResult?.correct) return s;
+      const correct = optionId === s.pendingCheck.correctOptionId;
+      lastComprehensionResultRef.current = { correct };
+      return { ...s, checkResult: { optionId, correct } };
+    });
+  }, []);
+
+  const retryCheck = useCallback(() => {
+    setState((s) => ({ ...s, checkResult: null }));
+  }, []);
+
+  const clearCircledRegion = useCallback(() => {
+    store.clearRegion();
+  }, [store]);
 
   const busy =
     state.stage !== 'IDLE' &&
@@ -477,5 +609,18 @@ export function useLesson(
     state.stage !== 'FAILED' &&
     state.stage !== 'CANCELLED';
 
-  return { state, store, ask, cancel, reset, busy, onManualCamera };
+  return {
+    state,
+    store,
+    ask,
+    cancel,
+    reset,
+    busy,
+    onManualCamera,
+    speak,
+    stopSpeaking,
+    answerCheck,
+    retryCheck,
+    clearCircledRegion,
+  };
 }

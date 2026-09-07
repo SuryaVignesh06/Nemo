@@ -84,6 +84,7 @@ except ImportError:  # pragma: no cover - depends on the local environment
 #: Mirrors the `implemented` subset of shared/registry.ts, narrowed to what
 #: Manim can express directly.
 SUPPORTED = {
+    "CREATE_WIREFRAME_BRAIN",
     "WRITE_TITLE",
     "WRITE_SUBTITLE",
     "DRAW_TEXT",
@@ -432,8 +433,19 @@ def _register() -> None:
             "CREATE_WIRE": _wire,
             "CREATE_CODE_BLOCK": _code_block,
             "SHOW_CURRENT_FLOW": _current_flow,
+            "CREATE_WIREFRAME_BRAIN": _wireframe_brain,
         }
     )
+
+
+def _wireframe_brain(action: dict, ctx: "BuildContext") -> Any:
+    try:
+        from manim.scenes.brain import create_brain_wireframe
+        params = action.get("parameters", {})
+        labels = bool(params.get("labels", True))
+        return create_brain_wireframe(labels=labels)
+    except Exception:
+        return Circle(radius=1.8, color=BLUE)
 
 
 def _triangle(action: dict) -> Any:

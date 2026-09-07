@@ -6,8 +6,10 @@
  * feature adds a view here; it never rebuilds the shell or grows navigation of
  * its own.
  *
- * Chat and Visual are two views of one session rather than two destinations —
- * the lesson state lives above both, so switching keeps the conversation.
+ * Chat and Visual are two independent sessions, each with its own lesson
+ * state, scene store, and in-flight request. Asking something in one never
+ * touches the other — switching views just changes which session is on
+ * screen.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -31,7 +33,10 @@ import { ConfigPanel } from './components/ConfigPanel.tsx';
 import { LessonRail } from './components/LessonRail.tsx';
 import { StatusStrip } from './components/StatusStrip.tsx';
 import { TopBar } from './components/TopBar.tsx';
+import { CognitiveTutorPanel } from './components/CognitiveTutorPanel.tsx';
 import { Icon } from './components/ui/Icon.tsx';
+import { LiveTranscriptionBar } from './components/LiveTranscriptionBar.tsx';
+import { LibraryPage } from './components/LibraryPage.tsx';
 import { useLesson } from './hooks/useLesson.ts';
 import { useSettings } from './hooks/useSettings.ts';
 
@@ -47,33 +52,6 @@ const SEARCHABLE_CHATS: readonly SidebarConversation[] = [
   { id: 'pn-junction', title: 'Explain PN junction' },
   { id: 'c-pointers', title: 'C pointers' },
 ];
-
-const LIBRARY_GROUPS = [
-  {
-    code: '01',
-    title: 'Circuit fundamentals',
-    copy: 'Ohm’s law, Kirchhoff’s laws, RC response, and signal paths.',
-    prompt: 'Teach me circuit fundamentals visually.',
-  },
-  {
-    code: '02',
-    title: 'ESP32 & microcontrollers',
-    copy: 'GPIO, PWM, UART, I²C, SPI, timers, and embedded debugging.',
-    prompt: 'How does an ESP32 turn on an LED?',
-  },
-  {
-    code: '03',
-    title: 'Semiconductors',
-    copy: 'PN junctions, diodes, MOSFET operation, carriers, and band diagrams.',
-    prompt: 'Explain a PN junction visually.',
-  },
-  {
-    code: '04',
-    title: 'Programming systems',
-    copy: 'Algorithms, C pointers, data structures, and code execution flow.',
-    prompt: 'Explain binary search.',
-  },
-] as const;
 
 const APPEARANCE_KEY = 'nemo.appearance';
 const PREFERENCES_KEY = 'nemo.preferences';
@@ -155,35 +133,6 @@ function SearchDialog({
   );
 }
 
-/* ----------------------------------------------------------------- library */
-
-function LibraryPage({ onLearn }: { onLearn(prompt: string): void }) {
-  return (
-    <main className="nemo-library" aria-label="Library">
-      <div className="nemo-library__inner">
-        <p className="nemo-library__eyebrow">Library</p>
-        <h1>Start from a topic</h1>
-        <p className="nemo-library__intro">
-          Open a collection and NEMO explains it, then draws the parts that are easier to see than
-          to read.
-        </p>
-        <div className="nemo-library__grid">
-          {LIBRARY_GROUPS.map((item) => (
-            <article key={item.code} className="nemo-library__card">
-              <span className="nemo-library__code">{item.code}</span>
-              <h2>{item.title}</h2>
-              <p>{item.copy}</p>
-              <button type="button" onClick={() => onLearn(item.prompt)}>
-                Start learning <Icon name="chevron-right" size={15} />
-              </button>
-            </article>
-          ))}
-        </div>
-      </div>
-    </main>
-  );
-}
-
 /* --------------------------------------------------------------------- app */
 
 export default function App() {
@@ -209,7 +158,10 @@ export default function App() {
 
   const [canvasZoom, setCanvasZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [cognitiveOpen, setCognitiveOpen] = useState(false);
   const [turns, setTurns] = useState<TurnSnapshot[]>([]);
+  const [annotateMode, setAnnotateMode] = useState(false);
+  const [circledLabels, setCircledLabels] = useState<string[]>([]);
 
   const insets = useCallback(
     (hasLesson: boolean) => ({
@@ -220,20 +172,56 @@ export default function App() {
     }),
     [railCollapsed]
   );
-  const { state, store, ask, cancel, reset, busy, onManualCamera } = useLesson(
-    settings,
-    providerPayload,
-    insets
-  );
+  /*
+   * Two fully independent lesson sessions, not one shared above both views.
+   * Asking something in chat must never touch the visual canvas and vice
+   * versa — each keeps its own state, scene store, and in-flight request.
+   */
+  const {
+    state: chatState,
+    ask: chatAsk,
+    cancel: chatCancel,
+    reset: chatReset,
+    busy: chatBusy,
+    answerCheck: chatAnswerCheck,
+    retryCheck: chatRetryCheck,
+  } = useLesson(settings, providerPayload, insets, 'chat');
+
+  const {
+    state: visualState,
+    store: visualStore,
+    ask: visualAsk,
+    cancel: visualCancel,
+    busy: visualBusy,
+    onManualCamera: visualOnManualCamera,
+    answerCheck: visualAnswerCheck,
+    retryCheck: visualRetryCheck,
+    clearCircledRegion: visualClearCircledRegion,
+  } = useLesson(settings, providerPayload, insets, 'visual');
+
+  const activeVoiceState = view === 'canvas' ? visualState : chatState;
+
+  /* Circling is only meaningful once the board has finished drawing —
+     while the explanation is still being narrated/drawn there is nothing
+     stable yet to circle, and a lasso mid-draw would just fight the
+     presenter's own camera moves. */
+  const canAnnotate = visualState.stage === 'COMPLETED';
+  useEffect(() => {
+    if (!canAnnotate && annotateMode) setAnnotateMode(false);
+  }, [canAnnotate, annotateMode]);
 
   useEffect(() => {
-    if (!state.question) return;
+    if (!chatState.question) return;
     const current: TurnSnapshot = {
-      question: state.question,
-      answer: state.answer,
-      finalAnswer: state.finalAnswer,
-      definitions: state.definitions,
-      error: state.error,
+      question: chatState.question,
+      answer: chatState.answer,
+      chatAnswer: chatState.chatAnswer,
+      finalAnswer: chatState.finalAnswer,
+      definitions: chatState.definitions,
+      sources: chatState.sources,
+      videos: chatState.videos,
+      steps: chatState.steps,
+      error: chatState.error,
     };
     setTurns((prev) => {
       const idx = prev.findIndex((t) => t.question === current.question);
@@ -244,7 +232,7 @@ export default function App() {
       }
       return [...prev, current];
     });
-  }, [state.question, state.answer, state.finalAnswer, state.definitions, state.error]);
+  }, [chatState.question, chatState.answer, chatState.finalAnswer, chatState.definitions, chatState.error]);
 
   /* Appearance is a document-level concern: one attribute, whole app. */
   useEffect(() => {
@@ -270,27 +258,27 @@ export default function App() {
   }, []);
 
   const newChat = useCallback(() => {
-    reset();
+    chatReset();
     setTurns([]);
     setChatKey((key) => key + 1);
     setActiveConversationId(undefined);
     setActiveProjectId(undefined);
     setView('chat');
     setSidebarOpen(false);
-  }, [reset]);
+  }, [chatReset]);
 
   const askFresh = useCallback(
     (prompt: string, conversationId?: string) => {
-      const nextSessionId = reset();
+      const nextSessionId = chatReset();
       setChatKey((key) => key + 1);
       setActiveConversationId(conversationId);
       setActiveProjectId(undefined);
       setView('chat');
       setSearchOpen(false);
       setSidebarOpen(false);
-      requestAnimationFrame(() => ask(prompt, nextSessionId));
+      requestAnimationFrame(() => chatAsk(prompt, nextSessionId));
     },
-    [ask, reset]
+    [chatAsk, chatReset]
   );
 
   const openConversation = useCallback(
@@ -320,6 +308,9 @@ export default function App() {
       } else if (key === 'b') {
         event.preventDefault();
         setCollapsed((value) => !value);
+      } else if (key === 'l') {
+        event.preventDefault();
+        setShowLog((value) => !value);
       } else if (key === '/') {
         event.preventDefault();
         setDialog('shortcuts');
@@ -391,99 +382,127 @@ export default function App() {
         <TopBar
           mode={mode}
           onModeChange={(next) => navigate(next === 'canvas' ? 'canvas' : 'chat')}
-          visualReady={Boolean(state.plan)}
           onOpenMenu={() => setSidebarOpen(true)}
           onNewChat={newChat}
           onOpenSettings={openSettings}
+          onToggleCognitivePanel={() => setCognitiveOpen((v) => !v)}
+          isCognitiveOpen={cognitiveOpen}
+          configSlot={
+            <ConfigPanel
+              settings={settings}
+              update={update}
+              updateProvider={updateProvider}
+              updateVoice={updateVoice}
+              voiceStatus={activeVoiceState.voiceStatus}
+              voiceDetail={activeVoiceState.voiceDetail}
+              hasBrowserKey={hasBrowserKey}
+              openRequest={settingsRequest}
+            />
+          }
         />
+
+        <CognitiveTutorPanel isOpen={cognitiveOpen} onClose={() => setCognitiveOpen(false)} />
 
         <div className="nemo-page">
           {view === 'chat' && (
             <ChatWorkspace
               key={chatKey}
-              state={state}
-              busy={busy}
-              onAsk={ask}
-              onStop={cancel}
+              state={chatState}
+              busy={chatBusy}
+              onAsk={chatAsk}
+              onStop={chatCancel}
               onOpenCanvas={() => navigate('canvas')}
               turns={turns}
               voiceEnabled={settings.voiceEnabled}
               onToggleVoice={() => update({ voiceEnabled: !settings.voiceEnabled })}
+              onAnswerCheck={chatAnswerCheck}
+              onRetryCheck={chatRetryCheck}
             />
           )}
 
           {view === 'canvas' && (
             <main
-              className={`canvas-stage app ${state.stage === 'IDLE' ? 'app--hero' : 'app--lesson'} ${railCollapsed ? 'canvas-stage--rail-collapsed' : ''}`}
+              className={`canvas-stage app ${visualState.stage === 'IDLE' ? 'app--hero' : 'app--lesson'} ${railCollapsed ? 'canvas-stage--rail-collapsed' : ''}`}
               aria-label="NEMO visual canvas"
             >
               <BoardCanvas
-                store={store}
-                drawing={state.stage === 'DRAWING'}
-                onManualCamera={onManualCamera}
+                store={visualStore}
+                drawing={visualState.stage === 'DRAWING'}
+                onManualCamera={visualOnManualCamera}
                 onZoomChange={setCanvasZoom}
+                annotateMode={annotateMode}
+                onRegionSelected={(labels) => {
+                  setCircledLabels(labels);
+                  setAnnotateMode(false);
+                }}
               />
 
-              {state.stage === 'IDLE' && turns.length === 0 ? (
+              <LiveTranscriptionBar state={visualState} busy={visualBusy} />
+
+              {visualState.stage === 'IDLE' ? (
                 <CanvasAskBar
-                  onAsk={ask}
-                  onStop={cancel}
-                  busy={busy}
+                  onAsk={visualAsk}
+                  onStop={visualCancel}
+                  busy={visualBusy}
                   voiceEnabled={settings.voiceEnabled}
                   onToggleVoice={() => update({ voiceEnabled: !settings.voiceEnabled })}
                 />
               ) : (
-                !railCollapsed && (
-                  <LessonRail
-                    state={state}
-                    busy={busy}
+                <div className="canvas-dock">
+                  <CanvasAskBar
+                    compact
+                    onAsk={(question) => {
+                      setCircledLabels([]);
+                      visualAsk(question);
+                    }}
+                    onStop={visualCancel}
+                    busy={visualBusy}
                     voiceEnabled={settings.voiceEnabled}
                     onToggleVoice={() => update({ voiceEnabled: !settings.voiceEnabled })}
-                    onAsk={ask}
-                    onStop={cancel}
-                    showLog={showLog}
-                    onToggleLog={() => setShowLog((value) => !value)}
+                    circledLabels={circledLabels}
+                    onClearCircled={() => {
+                      visualClearCircledRegion();
+                      setCircledLabels([]);
+                    }}
                   />
-                )
+                  {!railCollapsed && (
+                    <LessonRail
+                      state={visualState}
+                      busy={visualBusy}
+                      onAnswerCheck={visualAnswerCheck}
+                      onRetryCheck={visualRetryCheck}
+                      onAskFollowup={(q) => visualAsk(q)}
+                    />
+                  )}
+                </div>
               )}
 
               <CanvasHud
-                store={store}
+                store={visualStore}
                 zoom={canvasZoom}
-                onManualCamera={onManualCamera}
-                hasLesson={state.stage !== 'IDLE'}
+                onManualCamera={visualOnManualCamera}
+                hasLesson={visualState.stage !== 'IDLE'}
                 railOpen={!railCollapsed}
                 onToggleRail={() => setRailCollapsed((c) => !c)}
-                onClearBoard={() => {
-                  store.clear();
-                  reset();
-                }}
+                annotateMode={annotateMode}
+                canAnnotate={canAnnotate}
+                onToggleAnnotate={() => setAnnotateMode((v) => !v)}
               />
 
               <StatusStrip
-                state={state}
+                state={visualState}
                 showLog={showLog}
                 onDemoMode={() => {
                   update({ provider: 'mock' });
-                  ask(state.question || 'Explain binary search.');
+                  visualAsk(visualState.question || 'Explain binary search.');
                 }}
               />
             </main>
           )}
 
-          {view === 'library' && <LibraryPage onLearn={(prompt) => askFresh(prompt)} />}
+          {view === 'library' && <LibraryPage />}
         </div>
 
-        <ConfigPanel
-          settings={settings}
-          update={update}
-          updateProvider={updateProvider}
-          updateVoice={updateVoice}
-          voiceStatus={state.voiceStatus}
-          voiceDetail={state.voiceDetail}
-          hasBrowserKey={hasBrowserKey}
-          openRequest={settingsRequest}
-        />
         {notice && (
           <div className="nemo-toast" role="status">
             {notice}

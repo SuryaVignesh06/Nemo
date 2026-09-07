@@ -15,7 +15,10 @@ interface Props {
   railOpen?: boolean;
   onToggleRail?: () => void;
   hasLesson?: boolean;
-  onClearBoard?: () => void;
+  annotateMode?: boolean;
+  /** Whether the board has finished drawing and circling is allowed yet. */
+  canAnnotate?: boolean;
+  onToggleAnnotate?: () => void;
 }
 
 export function CanvasHud({
@@ -25,7 +28,9 @@ export function CanvasHud({
   railOpen = true,
   onToggleRail,
   hasLesson = false,
-  onClearBoard,
+  annotateMode = false,
+  canAnnotate = true,
+  onToggleAnnotate,
 }: Props) {
   const zoomPercent = Math.round(zoom * 100);
 
@@ -45,6 +50,8 @@ export function CanvasHud({
     onManualCamera?.();
   }, [store, onManualCamera]);
 
+  /* The zoom pill is also the recentre control — clicking it restores 100%
+     and the home camera, which is what the separate recentre button did. */
   const handleResetZoom = useCallback(() => {
     store.camera = { x: 1600 / 2, y: 900 / 2, zoom: 1 };
     store.touch();
@@ -88,43 +95,32 @@ export function CanvasHud({
             <line x1="5" y1="12" x2="19" y2="12" strokeLinecap="round" />
           </svg>
         </button>
+      </div>
 
-        <span className="canvas-hud__divider" aria-hidden="true" />
-
-        <button
-          type="button"
-          className="canvas-hud__btn"
-          onClick={handleResetZoom}
-          title="Center view (100%)"
-          aria-label="Center view"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
-            <circle cx="12" cy="12" r="7" />
-            <line x1="12" y1="2" x2="12" y2="5" strokeLinecap="round" />
-            <line x1="12" y1="19" x2="12" y2="22" strokeLinecap="round" />
-            <line x1="2" y1="12" x2="5" y2="12" strokeLinecap="round" />
-            <line x1="19" y1="12" x2="22" y2="12" strokeLinecap="round" />
-          </svg>
-        </button>
-
-        {onClearBoard && store.list().length > 0 && (
+      {hasLesson && onToggleAnnotate && (
+        <div className="canvas-hud__group">
           <button
             type="button"
-            className="canvas-hud__btn"
-            onClick={onClearBoard}
-            title="Clear board ink"
-            aria-label="Clear board"
+            className={`canvas-hud__btn ${annotateMode ? 'is-active' : ''}`}
+            onClick={onToggleAnnotate}
+            disabled={!canAnnotate}
+            title={
+              !canAnnotate
+                ? 'Wait for the explanation to finish before circling'
+                : annotateMode
+                  ? 'Exit circle mode'
+                  : 'Circle a part of the board to ask about just that'
+            }
+            aria-label={annotateMode ? 'Exit circle-and-ask mode' : 'Circle and ask about a region'}
+            aria-pressed={annotateMode}
+            aria-disabled={!canAnnotate}
           >
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z" />
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+              <ellipse cx="12" cy="12" rx="8" ry="6" strokeDasharray="3 3" />
             </svg>
           </button>
-        )}
-      </div>
-
-      <div className="canvas-hud__hint" aria-hidden="true">
-        <span>Drag to pan · Scroll to zoom</span>
-      </div>
+        </div>
+      )}
 
       {hasLesson && onToggleRail && (
         <button

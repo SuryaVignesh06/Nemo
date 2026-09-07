@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { NemoMark } from './ui/NemoMark.tsx';
 import { Icon } from './ui/Icon.tsx';
 import type { Appearance, LearningPreferences } from './accountPreferences.ts';
 
@@ -339,10 +340,7 @@ export function AccountDialogs({
       <Modal title="About NEMO" onClose={onClose} width={440}>
         <div className="nemo-about">
           <span className="nemo-about__mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
-              <circle cx="12" cy="12" r="8.4" />
-              <path d="M8.6 15.4V8.6l6.8 6.8V8.6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <NemoMark size={26} />
           </span>
           <div>
             <strong>NEMO</strong>

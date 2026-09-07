@@ -6,6 +6,7 @@
  */
 
 import { ModernComposer } from './ModernComposer.tsx';
+import { NemoMascot } from './ui/NemoMascot.tsx';
 
 export interface CanvasDemoItem {
   label: string;
@@ -49,13 +50,65 @@ interface Props {
   busy: boolean;
   voiceEnabled?: boolean;
   onToggleVoice?(): void;
+  compact?: boolean;
+  /** Readable labels of whatever the learner just circled on the board. */
+  circledLabels?: string[];
+  onClearCircled?(): void;
 }
 
-export function CanvasAskBar({ onAsk, onStop, busy, voiceEnabled, onToggleVoice }: Props) {
+export function CanvasAskBar({
+  onAsk,
+  onStop,
+  busy,
+  voiceEnabled,
+  onToggleVoice,
+  compact = false,
+  circledLabels,
+  onClearCircled,
+}: Props) {
+  if (compact) {
+    return (
+      <div className="canvas-ask canvas-ask--followup" aria-label="Ask a visual follow-up">
+        {circledLabels && circledLabels.length > 0 && (
+          <div className="canvas-ask__region-chip">
+            <span>
+              Circled: {circledLabels.slice(0, 3).join(', ')}
+              {circledLabels.length > 3 ? ` +${circledLabels.length - 3}` : ''}
+            </span>
+            {onClearCircled && (
+              <button type="button" onClick={onClearCircled} aria-label="Clear circled region">
+                ×
+              </button>
+            )}
+          </div>
+        )}
+        <ModernComposer
+          onSubmit={onAsk}
+          onStop={onStop}
+          busy={busy}
+          placeholder={
+            circledLabels && circledLabels.length > 0
+              ? 'Ask about what you circled…'
+              : 'Ask a follow-up on this canvas…'
+          }
+          voiceEnabled={voiceEnabled}
+          onToggleVoice={onToggleVoice}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="canvas-ask canvas-ask--hero">
       <div className="canvas-ask__header">
-        <h1 className="canvas-ask__title">Where should we begin?</h1>
+        <NemoMascot
+          size={76}
+          state={busy ? 'thinking' : 'idle'}
+          showBubble={true}
+          bubbleText="Hello!"
+          bubbleSubtitle="I'm NEMO!"
+          animated={true}
+        />
       </div>
 
       <div className="canvas-ask__composer-wrap">

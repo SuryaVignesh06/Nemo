@@ -61,7 +61,7 @@ export type CapabilitySection =
  */
 export const VISUAL_FUNCTION_REGISTRY_VERSION = '1.0.0';
 
-export type CapabilityRenderer = 'browser-canvas' | 'none';
+export type CapabilityRenderer = 'browser-canvas' | 'mermaid' | 'manim' | 'manimgl' | 'none';
 export type CapabilityImplementationStatus = 'implemented' | 'documented-only';
 export type CapabilityTestStatus = 'registry-covered' | 'not-implemented';
 
@@ -123,7 +123,10 @@ const IMPLEMENTED = new Set<string>([
   'STRIKE_TEXT', 'CIRCLE_TERM', 'BRACKET_TERM',
   // math
   'WRITE_EQUATION', 'WRITE_FORMULA', 'WRITE_FRACTION', 'TRANSFORM_EQUATION',
-  'SIMPLIFY_EXPRESSION',
+  'SIMPLIFY_EXPRESSION', 'WRITE_SUPERSCRIPT', 'WRITE_SUBSCRIPT', 'WRITE_MATRIX',
+  'WRITE_CASES', 'WRITE_LIMIT', 'WRITE_INTEGRAL', 'WRITE_DERIVATIVE', 'WRITE_SUM',
+  'WRITE_PRODUCT', 'WRITE_COMPLEX_NUMBER', 'WRITE_VECTOR_CALC',
+  'WRITE_DIFFERENTIAL_EQUATION', 'WRITE_UNITS',
   // geometry
   'DRAW_POINT', 'DRAW_CIRCLE', 'DRAW_ELLIPSE', 'DRAW_RECTANGLE', 'DRAW_SQUARE',
   'DRAW_TRIANGLE', 'DRAW_POLYGON', 'DRAW_REGULAR_POLYGON', 'DRAW_ARC',
@@ -162,7 +165,28 @@ const IMPLEMENTED = new Set<string>([
   // MVP aliases from the build spec
   'DRAW_GRAPH', 'DRAW_AXIS', 'MOVE_OBJECT', 'TRANSFORM_OBJECT', 'FADE_OBJECT',
   'REVEAL_STROKE', 'UNDERLINE', 'STRIKE_TERM', 'HIGHLIGHT_TERM', 'DRAW_SHAPE',
+  // structured diagrams rendered locally from validated semantic JSON
+  'CREATE_FLOWCHART', 'CREATE_SEQUENCE_DIAGRAM', 'CREATE_STATE_DIAGRAM',
+  'CREATE_CLASS_DIAGRAM', 'CREATE_ARCHITECTURE_DIAGRAM', 'CREATE_MINDMAP',
+  'CREATE_TIMELINE', 'CREATE_ER_DIAGRAM', 'CREATE_BLOCK_DIAGRAM',
+  // ManimGL-only 3D wireframes (offline critic render, no browser-canvas executor)
+  'CREATE_WIREFRAME_BRAIN',
 ]);
+
+const MERMAID_CAPABILITIES = new Set<string>([
+  'CREATE_FLOWCHART', 'CREATE_SEQUENCE_DIAGRAM', 'CREATE_STATE_DIAGRAM',
+  'CREATE_CLASS_DIAGRAM', 'CREATE_ARCHITECTURE_DIAGRAM', 'CREATE_MINDMAP',
+  'CREATE_TIMELINE', 'CREATE_ER_DIAGRAM', 'CREATE_BLOCK_DIAGRAM',
+]);
+
+/**
+ * Capabilities with no browser-canvas executor at all — they exist only as
+ * a ManimGL adapter (manim/nemo_compiler.py), rendered through the offline
+ * critic/render pipeline, never on the live board. Distinct from the
+ * Mermaid set because the renderer differs and the file/entryPoint metadata
+ * must point at the Python adapter, not execute.ts.
+ */
+const MANIMGL_ONLY_CAPABILITIES = new Set<string>([]);
 
 /** Aliases accepted from the model, mapped to the canonical executor. */
 const ALIASES: Record<string, string> = {
@@ -189,6 +213,28 @@ const ALIASES: Record<string, string> = {
   SHOW_RIEMANN_SUM: 'CREATE_RIEMANN_SUM',
   SHOW_BOUNDARY_EVALUATION: 'EVALUATE_BOUNDS',
   EVALUATE_LIMITS: 'EVALUATE_BOUNDS',
+  FLOWCHART: 'CREATE_FLOWCHART',
+  FLOW_CHART: 'CREATE_FLOWCHART',
+  FLOWCHAT: 'CREATE_FLOWCHART',
+  FLOW_CHAT: 'CREATE_FLOWCHART',
+  DRAW_FLOWCHART: 'CREATE_FLOWCHART',
+  DRAW_PROCESS: 'CREATE_FLOWCHART',
+  PROCESS_DIAGRAM: 'CREATE_FLOWCHART',
+  WORKFLOW: 'CREATE_FLOWCHART',
+  WORKFLOW_DIAGRAM: 'CREATE_FLOWCHART',
+  DIAGRAM: 'CREATE_FLOWCHART',
+  MERMAID: 'CREATE_FLOWCHART',
+  MERMAID_DIAGRAM: 'CREATE_FLOWCHART',
+  ARCHITECTURE: 'CREATE_ARCHITECTURE_DIAGRAM',
+  ARCHITECTURE_DIAGRAM: 'CREATE_ARCHITECTURE_DIAGRAM',
+  BLOCK_DIAGRAM: 'CREATE_BLOCK_DIAGRAM',
+  SYSTEM_DIAGRAM: 'CREATE_BLOCK_DIAGRAM',
+  SEQUENCE_DIAGRAM: 'CREATE_SEQUENCE_DIAGRAM',
+  STATE_DIAGRAM: 'CREATE_STATE_DIAGRAM',
+  CLASS_DIAGRAM: 'CREATE_CLASS_DIAGRAM',
+  MINDMAP: 'CREATE_MINDMAP',
+  TIMELINE: 'CREATE_TIMELINE',
+  ER_DIAGRAM: 'CREATE_ER_DIAGRAM',
 };
 
 /**
@@ -234,6 +280,11 @@ WRITE_LIMIT|Write limit notation.|expression, variable, target|Limit formula.
 WRITE_INTEGRAL|Write an integral.|integrand, bounds|Integral formula.
 WRITE_DERIVATIVE|Write derivative notation.|expression, order|Derivative.
 WRITE_SUM|Write summation notation.|term, bounds|Summation.
+WRITE_PRODUCT|Write product notation.|term, variable, lower, upper|Product formula.
+WRITE_COMPLEX_NUMBER|Write a complex number in rectangular or polar form.|real, imaginary, magnitude, angle|Complex number.
+WRITE_VECTOR_CALC|Write a vector-calculus operator applied to a field.|operator (grad/div/curl), field|Vector calculus expression.
+WRITE_DIFFERENTIAL_EQUATION|Write a differential equation.|expression, order, variable|Differential equation.
+WRITE_UNITS|Write a quantity with its physical unit.|value, unit|Value with unit.
 TRANSFORM_EQUATION|Show one mathematically valid equation transformation.|before, operation, after|Transition.
 ALIGN_EQUATION|Maintain equal-sign/column alignment.|equationGroup|Aligned equation stack.
 SIMPLIFY_EXPRESSION|Show simplification step.|before, after, rule|Step visual.`],
@@ -277,6 +328,15 @@ CREATE_GROUP|Create semantic visual group.|role, children|Group node.
 GROUP_ELEMENTS|Combine existing elements.|element IDs|Group.
 UNGROUP_ELEMENTS|Release group.|groupId|Child elements restored.
 CREATE_DIAGRAM|Create structured diagram container.|type, elements|Diagram.
+CREATE_FLOWCHART|Create a directed process or decision flowchart.|nodes[{id,label}], edges[{from,to,label}], direction|Validated Mermaid flowchart.
+CREATE_SEQUENCE_DIAGRAM|Create an interaction or protocol sequence.|nodes[{id,label}], edges[{from,to,label}]|Validated Mermaid sequence diagram.
+CREATE_STATE_DIAGRAM|Create states and transitions.|nodes[{id,label}], edges[{from,to,label}]|Validated Mermaid state diagram.
+CREATE_CLASS_DIAGRAM|Create class or type relationships.|nodes[{id,label}], edges[{from,to,label,relation}]|Validated Mermaid class diagram.
+CREATE_ARCHITECTURE_DIAGRAM|Create a software or hardware architecture overview.|nodes[{id,label}], edges[{from,to,label}], direction|Validated Mermaid architecture diagram.
+CREATE_MINDMAP|Create a compact conceptual hierarchy.|nodes[{id,label}]|Validated Mermaid mindmap.
+CREATE_TIMELINE|Create a chronological diagram.|title, nodes[{id,label}]|Validated Mermaid timeline.
+CREATE_ER_DIAGRAM|Create entity relationships.|nodes[{id,label}], edges[{from,to,label}]|Validated Mermaid ER diagram.
+CREATE_BLOCK_DIAGRAM|Create a system block or signal-flow diagram.|nodes[{id,label}], edges[{from,to,label}], direction|Validated Mermaid block diagram.
 DRAW_FLOWCHART|Construct flowchart.|nodes, edges|Flowchart.
 DRAW_PROCESS|Construct process sequence.|steps, arrows|Process diagram.
 DRAW_COMPARISON|Create side-by-side comparison.|left/right content|Comparison layout.
@@ -551,7 +611,8 @@ SHOW_3D_AXIS|3D coordinate axes.|origin,range|Axes.
 CREATE_LIGHT|Controlled light.|type,position|Light.
 SET_MATERIAL|Set allowed material properties.|object,material|Material.
 ORBIT_CAMERA|Orbit around target.|target,angle|Camera motion.
-LOOK_AT_3D|Orient camera toward target.|target|Camera.`],
+LOOK_AT_3D|Orient camera toward target.|target|Camera.
+CREATE_WIREFRAME_BRAIN|Procedurally generated 3D wireframe brain (hemispheres, cortical folds, cerebellum, brain stem).|labels|Renders procedural 3D wireframe brain on both the live blackboard and via ManimGL.`],
 
   ['24. Image and annotation', `
 CREATE_IMAGE|Place image asset.|assetId|Image node.
@@ -733,10 +794,24 @@ function buildMetadata(
   const canonical = ALIASES[type] ?? type;
   const domain = DOMAIN_BY_SECTION[section];
   const category = categoryFor(section);
+  const mermaid = MERMAID_CAPABILITIES.has(canonical);
+  const manimglOnly = MANIMGL_ONLY_CAPABILITIES.has(canonical);
   const implementation: CapabilityImplementationMetadata = Object.freeze({
     status: implemented ? 'implemented' : 'documented-only',
-    file: implemented ? 'src/scene/execute.ts' : null,
-    entryPoint: implemented ? 'applyAction' : null,
+    file: implemented
+      ? mermaid
+        ? 'shared/visuals/mermaid.ts'
+        : manimglOnly
+          ? 'manim/nemo_compiler.py'
+          : 'src/scene/execute.ts'
+      : null,
+    entryPoint: implemented
+      ? mermaid
+        ? 'mermaidPayloadFromParameters'
+        : manimglOnly
+          ? 'ADAPTERS'
+          : 'applyAction'
+      : null,
     canonicalType: canonical,
   });
   const test: CapabilityTestMetadata = Object.freeze({
@@ -761,7 +836,7 @@ function buildMetadata(
     version: VISUAL_FUNCTION_REGISTRY_VERSION,
     domain,
     category,
-    renderer: implemented ? 'browser-canvas' : 'none',
+    renderer: implemented ? (mermaid ? 'mermaid' : manimglOnly ? 'manimgl' : 'browser-canvas') : 'none',
     implementation,
     test,
     example,
@@ -814,12 +889,13 @@ export const EXECUTABLE_TYPES: readonly string[] = Object.freeze(
 
 /** True when the name exists anywhere in the registry documents. */
 export function isKnownCapability(type: string): boolean {
-  return CAPABILITY_BY_TYPE.has(type);
+  return CAPABILITY_BY_TYPE.has(type) || (ALIASES[type] !== undefined && CAPABILITY_BY_TYPE.has(ALIASES[type]));
 }
 
 /** True when the name has a deterministic executor in this build. */
 export function isExecutable(type: string): boolean {
-  return CAPABILITY_BY_TYPE.get(type)?.implemented === true;
+  const canonical = canonicalType(type);
+  return CAPABILITY_BY_TYPE.get(canonical)?.implemented === true;
 }
 
 /** Resolve an alias to the capability the engine actually runs. */
@@ -1180,6 +1256,7 @@ const CORE_SECTIONS: readonly string[] = [
   '3. Mathematical writing',
   '4. Basic geometric drawing',
   '5. Lines, paths, arrows, vectors',
+  '6. Diagram structure',
   '7. Highlights and emphasis',
   '8. Visibility and reveal',
   '9. Motion and transformation',

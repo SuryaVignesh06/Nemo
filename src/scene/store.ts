@@ -42,6 +42,14 @@ export class SceneStore {
   penDown = false;
   /** Nodes dimmed by DIM_OTHERS, restored by RESTORE_EMPHASIS. */
   private dimmed = new Set<string>();
+  /** First node in the currently focused question on the persistent canvas. */
+  private activeSectionStart = 0;
+  /** Stable model ids rebound to their instance in the current canvas section. */
+  private activeAliases = new Map<string, string>();
+  /** Semantic object selected inside a structured renderer. */
+  selectedObjectId: string | null = null;
+  /** Freehand-circled area on the board, with whatever it enclosed. */
+  selectedRegion: { points: Vec2[]; nodeIds: string[] } | null = null;
   /** Incremented on every mutation so React can re-render cheaply. */
   version = 0;
 
@@ -54,12 +62,60 @@ export class SceneStore {
     this.nodes.clear();
     this.order = [];
     this.dimmed.clear();
+    this.activeSectionStart = 0;
+    this.activeAliases.clear();
+    this.selectedObjectId = null;
+    this.selectedRegion = null;
     this.camera = { x: BOARD.width / 2, y: BOARD.height / 2, zoom: 1 };
     this.pen = null;
     this.penDown = false;
     this.flowY = BOARD.margin + 20;
     this.flowX = BOARD.width / 2;
     this.version++;
+  }
+
+  /**
+   * Preserve the board, then move the writing cursor and camera to a clean
+   * neighbouring region for a follow-up lesson.
+   */
+  beginSection(): Camera {
+    const bounds = this.contentBounds();
+    this.activeSectionStart = this.order.length;
+    this.activeAliases.clear();
+    this.dimmed.clear();
+    this.selectedObjectId = null;
+    this.selectedRegion = null;
+    this.flowX = bounds ? bounds.x + bounds.w + 240 : BOARD.width / 2;
+    this.flowY = BOARD.margin + 20;
+    // Keep camera where user is looking so content never vanishes;
+    // camera will smoothly tween when new actions are drawn.
+    if (!bounds) {
+      this.camera = { x: this.flowX, y: BOARD.height / 2, zoom: 1 };
+    }
+    this.pen = null;
+    this.penDown = false;
+    this.version++;
+    return { ...this.camera };
+  }
+
+  selectObject(id: string | null): void {
+    this.selectedObjectId = id;
+    this.version++;
+  }
+
+  /** Record a freehand-circled area and the nodes it enclosed. */
+  selectRegion(points: Vec2[], nodeIds: string[]): void {
+    this.selectedRegion = { points, nodeIds };
+    this.version++;
+  }
+
+  clearRegion(): void {
+    this.selectedRegion = null;
+    this.version++;
+  }
+
+  bindActiveAlias(alias: string | undefined, nodeId: string): void {
+    if (alias) this.activeAliases.set(alias, nodeId);
   }
 
   /**
@@ -82,11 +138,15 @@ export class SceneStore {
   /** Resolve a target reference, tolerating "array.midpoint" style paths. */
   resolve(ref: string | undefined): SceneNode | undefined {
     if (!ref) return undefined;
+    const activeId = this.activeAliases.get(ref);
+    if (activeId) return this.nodes.get(activeId);
     const direct = this.nodes.get(ref);
     if (direct) return direct;
     // Fall back to the longest id that prefixes the reference, then to a
     // semantic-role match, so labels attach to what the model meant.
     const base = ref.split('.')[0];
+    const activeBaseId = this.activeAliases.get(base);
+    if (activeBaseId) return this.nodes.get(activeBaseId);
     const byId = this.nodes.get(base);
     if (byId) return byId;
     const byRole = this.list().find((n) => n.semanticRole === ref || n.semanticRole === base);
@@ -311,7 +371,8 @@ export class SceneStore {
           continue;
         }
 
-        if (!boundsOverlap(a, b, PAD)) continue;
+        const pad = current.type === 'diagram' || other.type === 'diagram' ? 56 : PAD;
+        if (!boundsOverlap(a, b, pad)) continue;
 
         /*
          * Who gives way: whoever matters less. On a tie the node written later
@@ -340,7 +401,7 @@ export class SceneStore {
           anchor = swap;
         }
 
-        const mtv = separationVector(worldBounds(mover), worldBounds(anchor), PAD);
+        const mtv = separationVector(worldBounds(mover), worldBounds(anchor), pad);
         mover.transform.x += mtv.x;
         mover.transform.y += mtv.y;
         shoves.set(mover.id, (shoves.get(mover.id) ?? 0) + 1);
@@ -443,6 +504,12 @@ export class SceneStore {
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
   }
 
+  /** Bounds of only the current question, so old lessons stay full-size nearby. */
+  activeContentBounds(): Bounds | null {
+    const ids = this.order.slice(this.activeSectionStart);
+    return this.contentBounds(ids) ?? this.contentBounds();
+  }
+
   setDimmed(ids: string[]): void {
     this.dimmed = new Set(ids);
     this.version++;
@@ -474,10 +541,10 @@ export function separationVector(mover: Bounds, anchor: Bounds, pad = 0): Vec2 {
   const overlapBottom = anchor.y + anchor.h + pad - mover.y;
 
   const candidates: Array<{ v: Vec2; d: number }> = [
-    { v: { x: -overlapLeft, y: 0 }, d: Math.abs(overlapLeft) },
+    { v: { x: 0, y: overlapBottom }, d: Math.abs(overlapBottom) * 0.85 },
     { v: { x: overlapRight, y: 0 }, d: Math.abs(overlapRight) },
-    { v: { x: 0, y: -overlapTop }, d: Math.abs(overlapTop) },
-    { v: { x: 0, y: overlapBottom }, d: Math.abs(overlapBottom) },
+    { v: { x: -overlapLeft, y: 0 }, d: Math.abs(overlapLeft) },
+    { v: { x: 0, y: -overlapTop }, d: Math.abs(overlapTop) * 1.35 },
   ];
   candidates.sort((a, b) => a.d - b.d || (a.v.y > b.v.y ? -1 : 1));
   return candidates[0].v;
@@ -508,7 +575,7 @@ export function cameraForBounds(
 
   const zoomX = availW / Math.max(1, b.w + padding * 2);
   const zoomY = availH / Math.max(1, b.h + padding * 2);
-  const zoom = Math.max(0.05, Math.min(maxZoom, Math.min(zoomX, zoomY)));
+  const zoom = Math.max(0.45, Math.min(maxZoom, Math.min(zoomX, zoomY)));
 
   const contentCenterX = b.x + b.w / 2;
   const contentCenterY = b.y + b.h / 2;

@@ -35,6 +35,7 @@ import {
 } from '../handwriting/strokes.ts';
 import type { Pt } from '../handwriting/glyphs.ts';
 import { currentMarker, electronicsGeometry } from './visuals/electronics.ts';
+import { mermaidPayloadFromParameters } from '../../shared/visuals/mermaid.ts';
 
 export const INK = {
   chalk: '#f4f1e8',
@@ -168,6 +169,11 @@ function makeNode(
     while (store.get(`${id}-${n}`)) n++;
     id = `${id}-${n}`;
   }
+  // A follow-up may reuse generic ids such as "title_1". Bind creation ids to
+  // the new section so later relations resolve locally, not to an old lesson.
+  if (/^(CREATE_|DRAW_|WRITE_|MARK_|PLOT_)/.test(action.type)) {
+    store.bindActiveAlias(wanted, id);
+  }
   return {
     id,
     type,
@@ -231,6 +237,55 @@ const FONT = {
   cell: 26,
 };
 
+export function formatMathExpression(expr: string): string {
+  if (!expr) return '';
+  return expr
+    // Integrals with bounds
+    .replace(/\\int_\{?0\}?\^\{?2\}?/g, '∫₀²')
+    .replace(/\\int_\{?([0-9a-zA-Z])\}?\^\{?([0-9a-zA-Z])\}?/g, (_m, a, b) => {
+      const subMap: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', 'a': 'ₐ', 'b': 'ᵦ' };
+      const supMap: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', 'a': 'ᵃ', 'b': 'ᵇ' };
+      return `∫${subMap[a] ?? a}${supMap[b] ?? b}`;
+    })
+    .replace(/\\int\b/g, '∫')
+    // Fractions: \frac{a}{b} -> a / b
+    .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '$1 / $2')
+    // Brackets and braces
+    .replace(/\\left\[/g, '[')
+    .replace(/\\right\]/g, ']')
+    .replace(/\\left\(/g, '(')
+    .replace(/\\right\)/g, ')')
+    .replace(/\\left\\\{/g, '{')
+    .replace(/\\right\\\}/g, '}')
+    // Powers and superscripts
+    .replace(/\^2\b/g, '²')
+    .replace(/\^3\b/g, '³')
+    .replace(/\^0\b/g, '⁰')
+    .replace(/\^1\b/g, '¹')
+    // Subscripts
+    .replace(/_0\b/g, '₀')
+    .replace(/_1\b/g, '₁')
+    .replace(/_2\b/g, '₂')
+    .replace(/_3\b/g, '₃')
+    // Common LaTeX symbols
+    .replace(/\\times\b/g, '×')
+    .replace(/\\cdot\b/g, '·')
+    .replace(/\\div\b/g, '÷')
+    .replace(/\\pm\b/g, '±')
+    .replace(/\\le(q)?\b/g, '≤')
+    .replace(/\\ge(q)?\b/g, '≥')
+    .replace(/\\ne(q)?\b/g, '≠')
+    .replace(/\\approx\b/g, '≈')
+    .replace(/\\infty\b/g, '∞')
+    .replace(/\\theta\b/g, 'θ')
+    .replace(/\\pi\b/g, 'π')
+    .replace(/\\Delta\b/g, 'Δ')
+    .replace(/\\sum\b/g, '∑')
+    .replace(/\\sqrt\{([^{}]+)\}/g, '√($1)')
+    .replace(/\\/g, '')
+    .trim();
+}
+
 function buildText(
   store: SceneStore,
   action: VisualAction,
@@ -242,6 +297,10 @@ function buildText(
 ): ActionOutcome {
   const seed = `${ctx.lessonId}:${action.actionId}`;
   const maxWidth = 760;
+  // Automatically format LaTeX or math symbols for handwriting canvas
+  if (type === 'equation' || /\\(int|frac|left|right|cdot|times|approx|sqrt|theta|pi|le|ge|pm)|[\^_{}]/.test(text)) {
+    text = formatMathExpression(text);
+  }
   // Wrap long text rather than letting it run off the board (WRAP_TEXT).
   const lines = wrapText(text, fontSize, maxWidth);
   const strokes: InkStroke[] = [];
@@ -458,6 +517,253 @@ function showCurrentFlow(store: SceneStore, action: VisualAction, ctx: ExecConte
 
 /* ------------------------------------------------------------ the executor */
 
+function buildMermaidDiagram(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  try {
+    const renderPayload = mermaidPayloadFromParameters(action.type, action.parameters ?? {});
+    const wanted = action.target?.trim() || `${action.actionId}-mermaid`;
+    let id = wanted;
+    for (let suffix = 2; store.get(id); suffix++) id = `${wanted}-${suffix}`;
+    store.bindActiveAlias(wanted, id);
+    const node: SceneNode = {
+      id,
+      type: 'diagram',
+      semanticRole: action.semanticRole || renderPayload.visualType,
+      priority: action.priority ?? 'PRIMARY',
+      visible: true,
+      strokes: [],
+      localBounds: { w: 720, h: 460 },
+      transform: { x: 0, y: 0, scale: 1, rotation: 0 },
+      opacity: 1,
+      drawProgress: 1,
+      color: INK.chalk,
+      actionId: action.actionId,
+      renderPayload,
+    };
+    let relations = action.relations;
+    // Anti-overlap: ensure Mermaid diagrams never overlap Manim / blackboard visual explanations
+    const activeNodes = store.list().filter(
+      (n) => n.visible && n.opacity > 0.05 && n.localBounds.w > 0
+    );
+    const existingVisuals = activeNodes.filter(
+      (n) => n.id !== id && (n.type === 'diagram' || n.strokes.length > 5 || n.localBounds.h > 120)
+    );
+
+    if (!relations || relations.length === 0) {
+      if (existingVisuals.length > 0) {
+        // Place cleanly BELOW the lowest visual element
+        let bottomNode = existingVisuals[0];
+        let maxBottom = worldBounds(bottomNode).y + worldBounds(bottomNode).h;
+        for (const v of existingVisuals) {
+          const b = worldBounds(v);
+          if (b.y + b.h > maxBottom) {
+            maxBottom = b.y + b.h;
+            bottomNode = v;
+          }
+        }
+        relations = [{ type: 'BELOW', target: bottomNode.id, gap: 'loose' }];
+      } else {
+        const titleNode = activeNodes.find(
+          (n) => n.type === 'text' && (n.semanticRole === 'PRIMARY' || n.id.includes('title') || n.id.includes('sub'))
+        );
+        if (titleNode) {
+          relations = [{ type: 'BELOW', target: titleNode.id, gap: 'normal' }];
+        }
+      }
+    } else {
+      // If relations specifically pointed to 'subtitle' or 'title', but visual explanation nodes already exist below it:
+      const targetRel = relations.find((r) => r.type === 'BELOW' && (r.target.includes('title') || r.target.includes('sub')));
+      if (targetRel && existingVisuals.length > 0) {
+        let bottomNode = existingVisuals[0];
+        let maxBottom = worldBounds(bottomNode).y + worldBounds(bottomNode).h;
+        for (const v of existingVisuals) {
+          const b = worldBounds(v);
+          if (b.y + b.h > maxBottom) {
+            maxBottom = b.y + b.h;
+            bottomNode = v;
+          }
+        }
+        relations = [{ type: 'BELOW', target: bottomNode.id, gap: 'loose' }];
+      }
+    }
+    const layout = store.add(node, relations);
+    store.reserveFlow(node.localBounds.h + 60);
+    return {
+      kind: 'instant',
+      nodeIds: [node.id],
+      duration: pace(action, 0.35),
+      layout,
+      note: `rendered ${renderPayload.visualType} with Mermaid`,
+    };
+  } catch (error) {
+    const rawMsg = (error as Error).message || '';
+    const labelText = typeof action.parameters?.title === 'string'
+      ? `Diagram: ${action.parameters.title}`
+      : rawMsg && !rawMsg.startsWith('[')
+        ? `Diagram: ${rawMsg}`
+        : 'Diagram in progress';
+    return buildText(
+      store,
+      action,
+      ctx,
+      labelText,
+      FONT.label,
+      INK.dim
+    );
+  }
+}
+
+function buildWireframeBrain(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  const p = action.parameters ?? {};
+  const seed = `${ctx.lessonId}:${action.actionId}`;
+  const color = colorOf(p, INK.blue);
+  const showLabels = p.labels !== false;
+
+  const strokes: InkStroke[] = [];
+  const phi = (72 * Math.PI) / 180;
+  const theta = (-65 * Math.PI) / 180;
+  const cosT = Math.cos(theta), sinT = Math.sin(theta);
+  const cosP = Math.cos(phi), sinP = Math.sin(phi);
+
+  const cx = 360;
+  const cy = 240;
+  const scale = 56;
+
+  function project(x: number, y: number, z: number): Pt {
+    const rx = x * cosT - y * sinT;
+    const ry = x * sinT * cosP + y * cosT * cosP - z * sinP;
+    return [cx + rx * scale, cy - ry * scale];
+  }
+
+  const BRAIN_A = 2.5, BRAIN_B = 1.75, BRAIN_C = 1.65;
+  const GAP = 0.16;
+
+  // 1. Dual Hemispheres (Left & Right)
+  for (const side of [-1, 1]) {
+    const ox = side * (GAP / 2);
+    const usteps = 14;
+    const vsteps = 9;
+    const a = BRAIN_A * 0.92, b = BRAIN_B, c = BRAIN_C;
+
+    // Meridians
+    for (let i = 0; i < usteps; i++) {
+      const u = (Math.PI * 2 * i) / usteps;
+      const pts: Pt[] = [];
+      for (let j = 0; j <= vsteps; j++) {
+        const v = -Math.PI / 2 + (Math.PI * j) / vsteps;
+        const x = ox + a * Math.cos(v) * Math.cos(u);
+        const y = b * Math.cos(v) * Math.sin(u);
+        const z = c * Math.sin(v);
+        pts.push(project(x, y, z));
+      }
+      strokes.push(...polylineStrokes(pts, `${seed}:h${side}:u${i}`, { color, width: 1.2 }));
+    }
+
+    // Parallels
+    for (let j = 1; j < vsteps; j++) {
+      const v = -Math.PI / 2 + (Math.PI * j) / vsteps;
+      const pts: Pt[] = [];
+      for (let i = 0; i <= usteps; i++) {
+        const u = (Math.PI * 2 * i) / usteps;
+        const x = ox + a * Math.cos(v) * Math.cos(u);
+        const y = b * Math.cos(v) * Math.sin(u);
+        const z = c * Math.sin(v);
+        pts.push(project(x, y, z));
+      }
+      strokes.push(...polylineStrokes(pts, `${seed}:h${side}:v${j}`, { color, width: 1.2 }));
+    }
+
+    // Cortical Folds (Gyri & Sulci)
+    const rows = 8, cols = 7;
+    const fa = BRAIN_A * 0.92, fb = BRAIN_B * 0.96, fc = BRAIN_C * 0.92;
+    for (let r = 0; r < rows; r++) {
+      const y = (-1 + (2 * r) / (rows - 1)) * fb * 0.72;
+      for (let col = 0; col < cols; col++) {
+        const xn = -1 + (2 * col) / (cols - 1);
+        const x = xn * fa * 0.78;
+        if (x * side < -0.05) continue;
+        const q = Math.pow(x / fa, 2) + Math.pow(y / fb, 2);
+        if (q >= 0.90) continue;
+        const phase = r * 0.55 + col * 0.79 + side * 0.3;
+        const amp = 0.10 + 0.045 * Math.sin(phase);
+        const length = 0.42 + 0.20 * (0.5 + 0.5 * Math.cos(r * 0.4));
+        const pts: Pt[] = [];
+        for (let k = 0; k < 24; k++) {
+          const t = k / 23;
+          const xx = x + (2 * t - 1) * length;
+          const yy = y + amp * Math.sin(Math.PI * 2 * 1.15 * t + phase);
+          const q2 = Math.pow(xx / fa, 2) + Math.pow(yy / fb, 2);
+          if (q2 >= 0.96) continue;
+          const zz = fc * Math.sqrt(Math.max(0, 1 - q2));
+          const sign = Math.cos(phase + t * Math.PI) > 0 ? 1 : -1;
+          pts.push(project(ox + xx, yy, sign * (0.78 * zz + 0.06 * Math.sin(phase * 2 + t * Math.PI))));
+        }
+        if (pts.length > 5) {
+          strokes.push(...polylineStrokes(pts, `${seed}:f${side}:${r}:${col}`, { color: INK.cyan, width: 1.5 }));
+        }
+      }
+    }
+  }
+
+  // 2. Cerebellum
+  const c0y = -1.55, c0z = 0.10;
+  for (let r = 0; r < 6; r++) {
+    const y = -0.42 + r * 0.14;
+    const pts: Pt[] = [];
+    for (let i = 0; i < 30; i++) {
+      const t = i / 29;
+      const x = -0.78 + 1.56 * t;
+      const z = 0.17 * Math.sin(Math.PI * 2 * 3.5 * t + r * 0.35);
+      if (Math.pow(x / 0.95, 2) + Math.pow(y / 0.68, 2) < 0.94) {
+        pts.push(project(x, c0y + y, c0z + z));
+      }
+    }
+    if (pts.length > 4) {
+      strokes.push(...polylineStrokes(pts, `${seed}:cb:${r}`, { color: INK.violet, width: 1.6 }));
+    }
+  }
+
+  // 3. Brain Stem
+  const s0y = -2.0;
+  for (let j = 0; j < 5; j++) {
+    const pts: Pt[] = [];
+    for (let i = 0; i < 22; i++) {
+      const t = i / 21;
+      const z = 0.8 - 1.5 * t;
+      const x = 0.18 * Math.sin(t * Math.PI * 2 * 1.5 + j * 0.4);
+      const y = 0.10 * Math.cos(t * Math.PI * 2 + j * 0.4);
+      pts.push(project(x, s0y + y, z));
+    }
+    strokes.push(...polylineStrokes(pts, `${seed}:bs:${j}`, { color: INK.amber, width: 1.8 }));
+  }
+
+  // 4. Anatomical Labels
+  if (showLabels) {
+    const labels = [
+      { text: 'Frontal Lobe', pos: project(-1.55, 0.8, 0), color: INK.amber },
+      { text: 'Parietal Lobe', pos: project(0.8, 1.35, 0), color: INK.chalk },
+      { text: 'Temporal Lobe', pos: project(-1.55, -0.55, 0), color: INK.green },
+      { text: 'Cerebellum', pos: project(1.05, -1.7, 0), color: INK.violet },
+      { text: 'Brain Stem', pos: project(0.75, -2.25, 0), color: INK.cyan },
+    ];
+    for (const [li, item] of labels.entries()) {
+      const t = textToStrokes(item.text, 16, `${seed}:lbl:${li}`, { color: item.color, width: 1.8 });
+      strokes.push(...translateStrokes(t.strokes, item.pos[0] + 10, item.pos[1] - 8));
+      strokes.push(...circleStrokes(item.pos[0], item.pos[1], 3, `${seed}:dot:${li}`, { color: item.color, width: 1.8 }));
+    }
+  }
+
+  const node = makeNode(action, 'diagram', strokes, color, store);
+  let relations = action.relations;
+  if (!relations || relations.length === 0 || relations.some((r) => r.target.includes('title') || r.target.includes('sub'))) {
+    const existingDiagram = store.list().find((n) => n.type === 'diagram' && n.id !== node.id && n.renderPayload?.renderer === 'mermaid');
+    if (existingDiagram) {
+      relations = [{ type: 'BELOW', target: existingDiagram.id, gap: 'loose' }];
+    }
+  }
+  const layout = store.add(node, relations);
+  return { kind: 'draw', nodeIds: [node.id], duration: pace(action, 2.2), layout, note: 'rendered 3D wireframe brain' };
+}
+
 export function applyAction(
   store: SceneStore,
   action: VisualAction,
@@ -468,6 +774,20 @@ export function applyAction(
   const style = (color: string, width = 2.6): StrokeStyle => ({ color, width });
 
   switch (action.type) {
+    case 'CREATE_FLOWCHART':
+    case 'CREATE_SEQUENCE_DIAGRAM':
+    case 'CREATE_STATE_DIAGRAM':
+    case 'CREATE_CLASS_DIAGRAM':
+    case 'CREATE_ARCHITECTURE_DIAGRAM':
+    case 'CREATE_MINDMAP':
+    case 'CREATE_TIMELINE':
+    case 'CREATE_ER_DIAGRAM':
+    case 'CREATE_BLOCK_DIAGRAM':
+      return buildMermaidDiagram(store, action, ctx);
+
+    case 'CREATE_WIREFRAME_BRAIN':
+      return buildWireframeBrain(store, action, ctx);
+
     /* ----------------------------------------- embedded systems + circuits */
     case 'CREATE_ESP32':
     case 'CREATE_RESISTOR':
@@ -624,6 +944,169 @@ export function applyAction(
       const layout = store.add(node, action.relations);
       return { kind: 'draw', nodeIds: [node.id], duration: pace(action, 1.2), layout };
     }
+
+    /* ------------------------------------------------- math notation */
+    case 'WRITE_LIMIT': {
+      const variable = str(p, ['variable'], 'x');
+      const approach = str(p, ['target', 'approach', 'to'], '0');
+      const expression = str(p, ['expression', 'text'], '');
+      return buildText(
+        store,
+        action,
+        ctx,
+        `lim [${variable} -> ${approach}]  ${expression}`,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_INTEGRAL': {
+      const variable = str(p, ['variable'], 'x');
+      const integrand = str(p, ['integrand', 'expression', 'text'], '');
+      const lower = str(p, ['lower', 'from'], '');
+      const upper = str(p, ['upper', 'to'], '');
+      const bounds = lower && upper ? `[${lower}, ${upper}]` : '';
+      return buildText(
+        store,
+        action,
+        ctx,
+        `∫${bounds} ${integrand} d${variable}`,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_DERIVATIVE': {
+      const variable = str(p, ['variable'], 'x');
+      const expression = str(p, ['expression', 'text'], '');
+      const order = num(p, ['order'], 1);
+      const notation = order > 1 ? `d^${order}/d${variable}^${order}` : `d/d${variable}`;
+      return buildText(
+        store,
+        action,
+        ctx,
+        `${notation} [${expression}]`,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_SUM':
+    case 'WRITE_PRODUCT': {
+      const symbol = action.type === 'WRITE_SUM' ? 'Σ' : 'Π';
+      const variable = str(p, ['variable'], action.type === 'WRITE_SUM' ? 'i' : 'k');
+      const lower = str(p, ['lower', 'from'], '1');
+      const upper = str(p, ['upper', 'to'], 'n');
+      const term = str(p, ['term', 'expression', 'text'], '');
+      return buildText(
+        store,
+        action,
+        ctx,
+        `${symbol} (${variable}=${lower} to ${upper})  ${term}`,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_SUPERSCRIPT': {
+      const base = str(p, ['base'], '');
+      const exponent = str(p, ['exponent', 'power'], '');
+      return buildText(
+        store,
+        action,
+        ctx,
+        `${base}^${exponent}`,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_SUBSCRIPT': {
+      const base = str(p, ['base'], '');
+      const subscript = str(p, ['subscript', 'index'], '');
+      return buildText(
+        store,
+        action,
+        ctx,
+        `${base}_${subscript}`,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_COMPLEX_NUMBER': {
+      const magnitude = str(p, ['magnitude', 'r'], '');
+      const angle = str(p, ['angle', 'theta'], '');
+      let text: string;
+      if (magnitude && angle) {
+        text = `${magnitude} ∠ ${angle}°`;
+      } else {
+        const real = str(p, ['real'], '0');
+        const imaginary = str(p, ['imaginary', 'imag'], '0');
+        const sign = imaginary.trim().startsWith('-') ? '' : '+';
+        text = `${real} ${sign}${imaginary}i`;
+      }
+      return buildText(
+        store,
+        action,
+        ctx,
+        text,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_VECTOR_CALC': {
+      const operator = str(p, ['operator'], 'grad').toLowerCase();
+      const field = str(p, ['field', 'expression'], 'F');
+      const symbol = operator === 'div' ? '∇·' : operator === 'curl' ? '∇×' : '∇';
+      return buildText(
+        store,
+        action,
+        ctx,
+        `${symbol}${field}`,
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+    }
+
+    case 'WRITE_DIFFERENTIAL_EQUATION':
+      return buildText(
+        store,
+        action,
+        ctx,
+        str(p, ['expression', 'equation', 'text'], ''),
+        num(p, ['fontSize', 'size'], FONT.equation),
+        colorOf(p, INK.chalk),
+        'equation'
+      );
+
+    case 'WRITE_UNITS': {
+      const value = str(p, ['value'], '');
+      const unit = str(p, ['unit', 'units'], '');
+      return buildText(
+        store,
+        action,
+        ctx,
+        `${value} ${unit}`.trim(),
+        num(p, ['fontSize', 'size'], FONT.text),
+        colorOf(p, INK.chalk)
+      );
+    }
+
+    case 'WRITE_MATRIX':
+      return buildMatrix(store, action, ctx);
+
+    case 'WRITE_CASES':
+      return buildCases(store, action, ctx);
 
     /* ------------------------------------------------------ geometry */
     case 'DRAW_POINT': {
@@ -1210,7 +1693,9 @@ export function applyAction(
     case 'CAMERA_ESTABLISH':
     case 'CAMERA_FIT': {
       const marks = targets(store, action);
-      const b = store.contentBounds(marks.length ? marks.map((m) => m.id) : undefined);
+      const b = marks.length
+        ? store.contentBounds(marks.map((m) => m.id))
+        : store.activeContentBounds();
       if (!b) return { kind: 'wait', nodeIds: [], duration: 0 };
       return {
         kind: 'camera',
@@ -1266,7 +1751,7 @@ export function applyAction(
     }
 
     case 'CAMERA_RESET': {
-      const b = store.contentBounds();
+      const b = store.activeContentBounds();
       return {
         kind: 'camera',
         nodeIds: [],
@@ -1336,6 +1821,109 @@ function hexWithAlpha(hex: string, alpha: number): string {
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * A bracketed grid of entries — row-major `entries`, or `rows`/`cols` with a
+ * flat list, defaulting to a 2x2 identity so an under-specified plan still
+ * draws something recognisable.
+ */
+function buildMatrix(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  const p = action.parameters ?? {};
+  const seed = `${ctx.lessonId}:${action.actionId}`;
+  const fs = num(p, ['fontSize', 'size'], FONT.formula);
+  const color = colorOf(p, INK.chalk);
+
+  const rawEntries = list(p, ['entries', 'values']);
+  let rows: string[][];
+  if (rawEntries.length > 0 && Array.isArray(rawEntries[0])) {
+    rows = (rawEntries as unknown[]).map((row) => (row as unknown[]).map((v) => String(v)));
+  } else if (rawEntries.length > 0) {
+    const cols = Math.max(1, num(p, ['cols', 'columns'], Math.ceil(Math.sqrt(rawEntries.length))));
+    rows = [];
+    for (let i = 0; i < rawEntries.length; i += cols) {
+      rows.push(rawEntries.slice(i, i + cols).map((v) => String(v)));
+    }
+  } else {
+    rows = [
+      ['1', '0'],
+      ['0', '1'],
+    ];
+  }
+
+  const cols = Math.max(...rows.map((r) => r.length));
+  const colWidth = Math.max(...rows.flat().map((v) => measureText(v, fs))) + fs * 1.4;
+  const rowHeight = fs * 1.7;
+  const width = colWidth * cols;
+  const height = rowHeight * rows.length;
+
+  const strokes: InkStroke[] = [];
+  rows.forEach((row, r) => {
+    row.forEach((entry, c) => {
+      const w = measureText(entry, fs);
+      strokes.push(
+        ...translateStrokes(
+          textToStrokes(entry, fs, `${seed}:${r}:${c}`, { color }).strokes,
+          c * colWidth + (colWidth - w) / 2,
+          r * rowHeight
+        )
+      );
+    });
+  });
+
+  // Bracket the grid on both sides rather than attempting true bracket glyphs.
+  const pad = fs * 0.5;
+  strokes.push(...lineStrokes(-pad, -pad * 0.6, -pad, height + pad * 0.6, `${seed}:bl`, { color }));
+  strokes.push(...lineStrokes(-pad, -pad * 0.6, -pad * 0.35, -pad * 0.6, `${seed}:bl-top`, { color }));
+  strokes.push(...lineStrokes(-pad, height + pad * 0.6, -pad * 0.35, height + pad * 0.6, `${seed}:bl-bot`, { color }));
+  strokes.push(...lineStrokes(width + pad, -pad * 0.6, width + pad, height + pad * 0.6, `${seed}:br`, { color }));
+  strokes.push(...lineStrokes(width + pad * 0.35, -pad * 0.6, width + pad, -pad * 0.6, `${seed}:br-top`, { color }));
+  strokes.push(...lineStrokes(width + pad * 0.35, height + pad * 0.6, width + pad, height + pad * 0.6, `${seed}:br-bot`, { color }));
+
+  const node = makeNode(action, 'equation', strokes, color, store);
+  const layout = store.add(node, action.relations);
+  return { kind: 'draw', nodeIds: [node.id], duration: pace(action, 1.4), layout };
+}
+
+/** Piecewise notation: one value/condition per line, braced on the left. */
+function buildCases(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
+  const p = action.parameters ?? {};
+  const seed = `${ctx.lessonId}:${action.actionId}`;
+  const fs = num(p, ['fontSize', 'size'], FONT.formula);
+  const color = colorOf(p, INK.chalk);
+
+  const rawCases = list(p, ['cases']);
+  const rows: Array<{ value: string; condition: string }> = rawCases.length
+    ? rawCases.map((c) => {
+        const r = (c && typeof c === 'object' ? c : {}) as Record<string, unknown>;
+        return {
+          value: String(r.value ?? r.then ?? ''),
+          condition: String(r.condition ?? r.when ?? ''),
+        };
+      })
+    : [{ value: '', condition: '' }];
+
+  const rowHeight = fs * 1.7;
+  const height = rowHeight * rows.length;
+  const strokes: InkStroke[] = [];
+  const bracePad = fs * 0.9;
+
+  rows.forEach((row, i) => {
+    const text = row.condition ? `${row.value},  ${row.condition}` : row.value;
+    strokes.push(
+      ...translateStrokes(
+        textToStrokes(text, fs, `${seed}:${i}`, { color }).strokes,
+        bracePad,
+        i * rowHeight
+      )
+    );
+  });
+
+  strokes.push(...braceStrokes(0, -fs * 0.3, height + fs * 0.6, `${seed}:brace`, { color, width: 2 }, 'left'));
+
+  const node = makeNode(action, 'equation', strokes, color, store);
+  const layout = store.add(node, action.relations);
+  return { kind: 'draw', nodeIds: [node.id], duration: pace(action, 1.4), layout };
 }
 
 /* --------------------------------------------------- composite builders */
@@ -2177,7 +2765,7 @@ function buildCalculusArea(store: SceneStore, action: VisualAction, ctx: ExecCon
 
 function buildAntiderivative(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
   const p = action.parameters ?? {};
-  const expr = str(p, ['expression', 'antiderivative', 'text'], '\\int x^2 dx = \\frac{x^3}{3} + C');
+  const expr = str(p, ['expression', 'antiderivative', 'text'], '∫ x² dx = x³/3 + C');
   const color = colorOf(p, INK.chalk);
 
   return buildText(store, action, ctx, expr, FONT.equation, color, 'equation');
@@ -2185,7 +2773,7 @@ function buildAntiderivative(store: SceneStore, action: VisualAction, ctx: ExecC
 
 function buildEvaluateBounds(store: SceneStore, action: VisualAction, ctx: ExecContext): ActionOutcome {
   const p = action.parameters ?? {};
-  const expr = str(p, ['expression', 'equation', 'text'], `\\left[\\frac{x^3}{3}\\right]_0^2 = \\frac{8}{3}`);
+  const expr = str(p, ['expression', 'equation', 'text'], '[x³/3]₀² = 2³/3 - 0³/3 = 8/3');
   const color = colorOf(p, INK.amber);
 
   return buildText(store, action, ctx, expr, FONT.equation, color, 'equation');

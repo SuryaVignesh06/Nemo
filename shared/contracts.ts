@@ -7,6 +7,7 @@
  */
 
 import { RELATION_TYPES } from './registry.ts';
+import type { MermaidRenderPayload } from './visuals/mermaid.ts';
 
 export type LessonStatus =
   | 'PLANNING'
@@ -78,6 +79,27 @@ export interface TeachingBeat {
   completionCriteria: string[];
 }
 
+/** One multiple-choice option in a post-lesson comprehension check. */
+export interface ComprehensionOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * A quick check offered after the lesson finishes drawing.
+ *
+ * The learner's answer never blocks anything — it is read back on the next
+ * question as a hint for how to teach it (brief section 35: adapt, don't
+ * gate). Generated in the same model call as the lesson itself, so it costs
+ * no extra round trip.
+ */
+export interface ComprehensionCheck {
+  question: string;
+  options: ComprehensionOption[];
+  correctOptionId: string;
+  rationale: string;
+}
+
 export interface LessonPlan {
   lessonId: string;
   requestId: string;
@@ -88,6 +110,29 @@ export interface LessonPlan {
   beats: TeachingBeat[];
   finalSummary: string;
   status: LessonStatus;
+  /** Absent when the model did not produce a usable one — never required. */
+  comprehensionCheck?: ComprehensionCheck;
+}
+
+/**
+ * Context carried from one turn to the next on the persistent canvas.
+ *
+ * Sent by the client, read by the backend to scope the next answer instead
+ * of starting cold — a follow-up question about a circled region of the
+ * board should stay about that region.
+ */
+export interface CanvasContext {
+  previousQuestion?: string;
+  previousAnswer?: string;
+  /** Node clicked directly, e.g. a Mermaid diagram box. */
+  selectedObjectId?: string | null;
+  /** Readable labels of whatever the learner circled with the lasso tool. */
+  circledLabels?: string[];
+}
+
+/** What the learner did with the previous lesson's comprehension check. */
+export interface ComprehensionResult {
+  correct: boolean;
 }
 
 /* ---------------------------------------------------------------- stages */
@@ -122,6 +167,26 @@ export interface Solution {
 
 /* ---------------------------------------------------------------- events */
 
+/** One page the research step read before the lesson was written. */
+export interface SourceRef {
+  title: string;
+  url: string;
+  snippet: string;
+  source: string;
+  /** Deterministic favicon derived by the retrieval layer, never by the model. */
+  faviconUrl?: string;
+}
+
+/** A video the research step found for the same question. */
+export interface VideoRef {
+  id: string;
+  title: string;
+  url: string;
+  channel: string;
+  duration: string;
+  thumbnail: string;
+}
+
 export type LessonEvent =
   | { type: 'lesson.started'; lessonId: string; requestId: string; question: string }
   | { type: 'lesson.status'; lessonId: string; stage: string; detail?: string }
@@ -133,6 +198,21 @@ export type LessonEvent =
       answer: string;
       finalAnswer: string;
       domain: string;
+      /**
+       * The same answer said plainly, in a few sentences.
+       *
+       * The chat page shows this and keeps the full explanation behind the
+       * process disclosure: a learner who asked a question in a chat box wants
+       * an answer, not a lecture, and the lecture is still one click away.
+       */
+      chatAnswer?: string;
+    }
+  /** What the research step found, sent as soon as it lands. */
+  | {
+      type: 'lesson.research';
+      lessonId: string;
+      sources: SourceRef[];
+      videos: VideoRef[];
     }
   | { type: 'beat.started'; lessonId: string; beatId: string; order: number; narration: string }
   | { type: 'action.started'; lessonId: string; action: VisualAction }
@@ -259,6 +339,8 @@ export interface SceneNode {
   state?: Record<string, string | number | boolean>;
   /** Set when the node was produced by an action, for traceability. */
   actionId?: string;
+  /** Renderer-specific data still owned by the unified scene node. */
+  renderPayload?: MermaidRenderPayload;
 }
 
 /* -------------------------------------------------------------- helpers */

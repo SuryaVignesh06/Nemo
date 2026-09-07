@@ -639,9 +639,25 @@ class OpenAICompatibleProvider implements LLMProvider {
      * text is handed back as the assistant turn and the model is asked to
      * resume, which is how a long visual plan gets finished at all.
      */
-    for (let i = 0; i < maxContinuations && result.finishReason === 'length' && content.trim(); i++) {
+    const isJsonIncomplete = (text: string) => {
+      if (!opts.json) return false;
+      const clean = text.trim();
+      if (!clean) return false;
+      const start = clean.search(/[[{]/);
+      if (start === -1) return false;
+      const lastChar = clean[clean.length - 1];
+      return lastChar !== '}' && lastChar !== ']' && !clean.endsWith('```');
+    };
+
+    for (
+      let i = 0;
+      i < maxContinuations &&
+      (result.finishReason === 'length' || isJsonIncomplete(content)) &&
+      content.trim();
+      i++
+    ) {
       opts.onNotice?.(
-        `Reply hit the token limit — asking ${this.model} to continue (part ${i + 2}).`
+        `Reply hit token limit or paused — asking ${this.model} to continue (part ${i + 2}).`
       );
       const continuationMessages: Array<Record<string, unknown>> = [
         ...baseMessages,
@@ -774,6 +790,163 @@ function openRouterModel(raw: OpenRouterModelRecord): ModelInfo | null {
   };
 }
 
+export const KNOWN_OPENROUTER_MODELS: ModelInfo[] = [
+  {
+    id: 'inclusionai/ling-3.0-flash-fin:free',
+    name: 'InclusionAI: Ling 3.0 Flash Fin (Free)',
+    provider: 'openrouter',
+    contextLength: 32768,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['tools', 'structured_outputs'],
+  },
+  {
+    id: 'meta-llama/llama-3.3-70b-instruct:free',
+    name: 'Meta: Llama 3.3 70B Instruct (Free)',
+    provider: 'openrouter',
+    contextLength: 131072,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'deepseek/deepseek-r1:free',
+    name: 'DeepSeek: DeepSeek R1 (Free)',
+    provider: 'openrouter',
+    contextLength: 65536,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['reasoning'],
+  },
+  {
+    id: 'deepseek/deepseek-chat:free',
+    name: 'DeepSeek: DeepSeek V3 (Free)',
+    provider: 'openrouter',
+    contextLength: 65536,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'google/gemini-2.0-flash-exp:free',
+    name: 'Google: Gemini 2.0 Flash Experimental (Free)',
+    provider: 'openrouter',
+    contextLength: 1048576,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'mistralai/mistral-small-3.1-24b-instruct:free',
+    name: 'Mistral: Mistral Small 3.1 24B Instruct (Free)',
+    provider: 'openrouter',
+    contextLength: 32768,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'qwen/qwen-2.5-coder-32b-instruct:free',
+    name: 'Qwen: Qwen 2.5 Coder 32B Instruct (Free)',
+    provider: 'openrouter',
+    contextLength: 32768,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'meta-llama/llama-3.2-3b-instruct:free',
+    name: 'Meta: Llama 3.2 3B Instruct (Free)',
+    provider: 'openrouter',
+    contextLength: 131072,
+    isFree: true,
+    pricingTier: 'free',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'google/gemini-2.5-flash',
+    name: 'Google: Gemini 2.5 Flash',
+    provider: 'openrouter',
+    contextLength: 1048576,
+    isFree: false,
+    pricingTier: 'paid',
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'google/gemini-2.5-pro',
+    name: 'Google: Gemini 2.5 Pro',
+    provider: 'openrouter',
+    contextLength: 1048576,
+    isFree: false,
+    pricingTier: 'paid',
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+  {
+    id: 'openai/gpt-4o-mini',
+    name: 'OpenAI: GPT-4o Mini',
+    provider: 'openrouter',
+    contextLength: 128000,
+    isFree: false,
+    pricingTier: 'paid',
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text'],
+    capabilities: ['tools', 'structured_outputs'],
+  },
+  {
+    id: 'openai/gpt-4o',
+    name: 'OpenAI: GPT-4o',
+    provider: 'openrouter',
+    contextLength: 128000,
+    isFree: false,
+    pricingTier: 'paid',
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text'],
+    capabilities: ['tools', 'structured_outputs'],
+  },
+  {
+    id: 'anthropic/claude-3.5-sonnet',
+    name: 'Anthropic: Claude 3.5 Sonnet',
+    provider: 'openrouter',
+    contextLength: 200000,
+    isFree: false,
+    pricingTier: 'paid',
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text'],
+    capabilities: ['tools', 'structured_outputs'],
+  },
+  {
+    id: 'anthropic/claude-3.5-haiku',
+    name: 'Anthropic: Claude 3.5 Haiku',
+    provider: 'openrouter',
+    contextLength: 200000,
+    isFree: false,
+    pricingTier: 'paid',
+    inputModalities: ['text'],
+    outputModalities: ['text'],
+    capabilities: ['tools'],
+  },
+];
+
 /** OpenRouter generation plus provider-owned live catalog discovery. */
 export class OpenRouterProvider extends OpenAICompatibleProvider implements ModelProvider {
   constructor(cfg: ProviderConfig) {
@@ -782,7 +955,6 @@ export class OpenRouterProvider extends OpenAICompatibleProvider implements Mode
 
   async listModels(opts: ListModelsOptions = {}): Promise<ModelInfo[]> {
     const url = new URL(`${this.baseUrl}/models`);
-    // NEMO needs a textual lesson plan; exclude image/audio-only catalogs at the source.
     url.searchParams.set('output_modalities', 'text');
     if (opts.search?.trim()) url.searchParams.set('q', opts.search.trim());
     if (
@@ -794,26 +966,35 @@ export class OpenRouterProvider extends OpenAICompatibleProvider implements Mode
       url.searchParams.set('sort', opts.sort);
     }
 
-    const res = await fetchWithTimeout(
-      url.toString(),
-      { method: 'GET', headers: this.headers() },
-      discoveryTimeout(opts.timeoutMs),
-      'openrouter',
-      opts.signal
-    );
-    if (!res.ok) throw mapHttpError(res.status, await res.text(), 'openrouter');
-    const payload = await readProviderJson(res, 'openrouter');
-    if (
-      !payload ||
-      typeof payload !== 'object' ||
-      !Array.isArray((payload as { data?: unknown }).data)
-    ) {
-      throw new LessonError('INVALID_RESPONSE', 'OpenRouter returned no model catalog.');
+    try {
+      const res = await fetchWithTimeout(
+        url.toString(),
+        { method: 'GET', headers: this.headers() },
+        discoveryTimeout(opts.timeoutMs),
+        'openrouter',
+        opts.signal
+      );
+      if (!res.ok) throw mapHttpError(res.status, await res.text(), 'openrouter');
+      const payload = await readProviderJson(res, 'openrouter');
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        !Array.isArray((payload as { data?: unknown }).data)
+      ) {
+        throw new LessonError('INVALID_RESPONSE', 'OpenRouter returned no model catalog.');
+      }
+      const models = (payload as { data: OpenRouterModelRecord[] }).data
+        .map(openRouterModel)
+        .filter((model): model is ModelInfo => model !== null);
+
+      return applyModelQuery(models, opts);
+    } catch (err) {
+      if (err instanceof LessonError && (err.code === 'TIMEOUT' || err.code === 'STALE_REQUEST' || err.code === 'MISSING_CREDENTIALS')) {
+        throw err;
+      }
+      if (opts.signal?.aborted) throw err;
+      throw err;
     }
-    const models = (payload as { data: OpenRouterModelRecord[] }).data
-      .map(openRouterModel)
-      .filter((model): model is ModelInfo => model !== null);
-    return applyModelQuery(models, opts);
   }
 
   async healthCheck(
@@ -1198,11 +1379,66 @@ export function resolveProviderConfig(
   };
 }
 
+/** Sanitize unescaped control characters and broken backslashes inside JSON strings. */
+export function sanitizeJsonStrings(candidate: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < candidate.length; i++) {
+    const c = candidate[i];
+
+    if (escaped) {
+      // If escaped char is invalid in standard JSON, escape the backslash itself (e.g. \frac, \text)
+      if (!['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'].includes(c)) {
+        out += '\\' + c;
+      } else {
+        out += c;
+      }
+      escaped = false;
+      continue;
+    }
+
+    if (c === '\\' && inString) {
+      escaped = true;
+      out += c;
+      continue;
+    }
+
+    if (c === '"') {
+      inString = !inString;
+      out += c;
+      continue;
+    }
+
+    if (inString) {
+      // Escape raw control characters inside JSON strings (illegal in RFC 8259)
+      if (c === '\n') {
+        out += '\\n';
+        continue;
+      }
+      if (c === '\r') {
+        out += '\\r';
+        continue;
+      }
+      if (c === '\t') {
+        out += '\\t';
+        continue;
+      }
+    }
+
+    out += c;
+  }
+
+  return out;
+}
+
 /** Attempt to repair and parse JSON that was truncated by token limits. */
 export function tryRepairTruncatedJson(candidate: string): unknown | null {
-  const start = candidate.search(/[[{]/);
+  const clean = sanitizeJsonStrings(candidate);
+  const start = clean.search(/[[{]/);
   if (start === -1) return null;
-  const slice = candidate.slice(start);
+  const slice = clean.slice(start);
 
   const stack: string[] = [];
   let inString = false;
@@ -1238,6 +1474,7 @@ export function tryRepairTruncatedJson(candidate: string): unknown | null {
   repaired = repaired.replace(/,\s*"[^"]*"\s*:\s*"[^"]*$/g, '');
   repaired = repaired.replace(/,\s*"[^"]*"\s*:\s*$/g, '');
   repaired = repaired.replace(/,\s*"[^"]*"\s*$/g, '');
+  repaired = repaired.replace(/:\s*$/g, '');
   repaired = repaired.replace(/,\s*$/g, '');
 
   // Close remaining unclosed brackets in reverse order
@@ -1248,11 +1485,39 @@ export function tryRepairTruncatedJson(candidate: string): unknown | null {
   try {
     return JSON.parse(repaired);
   } catch {
-    // Second attempt: strip the last incomplete object in array if present
+    // Second attempt: strip the last incomplete object or property in array
     try {
-      const lastObjStart = repaired.lastIndexOf('{');
-      if (lastObjStart > 0) {
-        const sub = repaired.slice(0, lastObjStart).replace(/,\s*$/, '') + ']';
+      const lastComma = repaired.lastIndexOf(',');
+      if (lastComma > 0) {
+        let sub = repaired.slice(0, lastComma);
+        const subStack: string[] = [];
+        let sInString = false;
+        let sEsc = false;
+        for (let i = 0; i < sub.length; i++) {
+          const c = sub[i];
+          if (sEsc) {
+            sEsc = false;
+            continue;
+          }
+          if (c === '\\') {
+            sEsc = true;
+            continue;
+          }
+          if (c === '"') {
+            sInString = !sInString;
+            continue;
+          }
+          if (sInString) continue;
+          if (c === '{') subStack.push('}');
+          else if (c === '[') subStack.push(']');
+          else if (c === '}' || c === ']') {
+            if (subStack.length > 0 && subStack[subStack.length - 1] === c) subStack.pop();
+          }
+        }
+        if (sInString) sub += '"';
+        for (let i = subStack.length - 1; i >= 0; i--) {
+          sub += subStack[i];
+        }
         return JSON.parse(sub);
       }
     } catch {}
@@ -1264,28 +1529,46 @@ export function tryRepairTruncatedJson(candidate: string): unknown | null {
 export function extractJson(raw: string, allowRepair = false): unknown {
   const text = raw.trim();
   // Strip a fenced block if the model wrapped its JSON in one.
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = (fenced ? fenced[1] : text).trim();
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  let candidate = (
+    fenced
+      ? fenced[1]
+      : text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '')
+  ).trim();
 
+  // Try direct parse first
   try {
     return JSON.parse(candidate);
   } catch {
-    // Fall through to bracket matching.
+    // Fall through to sanitize and bracket matching
   }
 
-  const start = candidate.search(/[[{]/);
+  // Try parsing with sanitized strings
+  const sanitized = sanitizeJsonStrings(candidate);
+  try {
+    return JSON.parse(sanitized);
+  } catch {
+    // Fall through to bracket counting
+  }
+
+  const start = sanitized.search(/[[{]/);
   if (start === -1) {
+    if (allowRepair) {
+      const repaired = tryRepairTruncatedJson(candidate);
+      if (repaired !== null) return repaired;
+    }
     throw new LessonError('INVALID_RESPONSE', 'Model response contained no JSON.', [
       candidate.slice(0, 200),
     ]);
   }
-  const open = candidate[start];
+
+  const open = sanitized[start];
   const close = open === '{' ? '}' : ']';
   let depth = 0;
   let inString = false;
   let escaped = false;
-  for (let i = start; i < candidate.length; i++) {
-    const c = candidate[i];
+  for (let i = start; i < sanitized.length; i++) {
+    const c = sanitized[i];
     if (escaped) {
       escaped = false;
       continue;
@@ -1301,7 +1584,7 @@ export function extractJson(raw: string, allowRepair = false): unknown {
       depth--;
       if (depth === 0) {
         try {
-          return JSON.parse(candidate.slice(start, i + 1));
+          return JSON.parse(sanitized.slice(start, i + 1));
         } catch (err) {
           if (allowRepair) {
             const repaired = tryRepairTruncatedJson(candidate);

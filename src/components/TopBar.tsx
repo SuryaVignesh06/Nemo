@@ -1,10 +1,9 @@
 /**
+/**
  * NEMO — the top bar.
  *
- * Minimal by contract: the mode switch sits in the centre and nothing else
- * competes with it. Chat and Visual are two views of one session, so the
- * switch is chrome that never unmounts — moving between them keeps the
- * conversation rather than navigating away from it.
+ * Chat and Visual are navigation choices only. Their lesson sessions and state
+ * remain completely independent in App.
  */
 
 import { Icon } from './ui/Icon.tsx';
@@ -14,26 +13,40 @@ export type WorkspaceMode = 'chat' | 'canvas';
 interface Props {
   mode: WorkspaceMode;
   onModeChange(mode: WorkspaceMode): void;
-  /** Shown on the Visual tab once a lesson has been drawn. */
-  visualReady?: boolean;
   onOpenMenu?(): void;
   onNewChat?(): void;
   onOpenSettings?(): void;
+  onToggleCognitivePanel?(): void;
+  isCognitiveOpen?: boolean;
+  configSlot?: React.ReactNode;
 }
 
-export function TopBar({ mode, onModeChange, visualReady, onOpenMenu, onNewChat, onOpenSettings: _onOpenSettings }: Props) {
+export function TopBar({
+  mode,
+  onModeChange,
+  onOpenMenu,
+  onNewChat: _onNewChat,
+  onOpenSettings: _onOpenSettings,
+  onToggleCognitivePanel,
+  isCognitiveOpen,
+  configSlot,
+}: Props) {
   return (
     <header className="nemo-topbar">
+      {/* On the visual canvas the sidebar is hidden outright and this is the
+          only way back to it, so it shows an arrow pointing at where the
+          drawer will come from rather than the hamburger. */}
       <button
         className="nemo-topbar__menu"
         type="button"
         aria-label="Open navigation"
+        title="Open navigation"
         onClick={onOpenMenu}
       >
-        <Icon name="menu" />
+        <Icon name={mode === 'canvas' ? 'chevron-right' : 'menu'} />
       </button>
 
-      <div className="nemo-topbar__switch" role="tablist" aria-label="Workspace mode">
+      <div className="nemo-topbar__switch" role="tablist" aria-label="Workspace">
         <button
           type="button"
           role="tab"
@@ -50,24 +63,24 @@ export function TopBar({ mode, onModeChange, visualReady, onOpenMenu, onNewChat,
           className={mode === 'canvas' ? 'is-active' : ''}
           onClick={() => onModeChange('canvas')}
         >
-          <Icon name="sparkle" size={15} />
-          <span>Visual</span>
-          {visualReady && <span className="nemo-topbar__dot" aria-label="A visual is ready" />}
+          <Icon name="sparkle" size={14} />
+          Visual
         </button>
       </div>
 
       <div className="nemo-topbar__actions">
-        {onNewChat && (
+        {onToggleCognitivePanel && (
           <button
-            className="nemo-topbar__action"
+            className={`nemo-topbar__action ${isCognitiveOpen ? 'is-active' : ''}`}
             type="button"
-            aria-label="New chat"
-            title="New chat (Ctrl N)"
-            onClick={onNewChat}
+            aria-label="Cognitive AI Tutor & Knowledge Graph"
+            title="Cognitive AI Tutor & Knowledge Graph"
+            onClick={onToggleCognitivePanel}
           >
-            <Icon name="plus" />
+            <Icon name="brain" size={16} />
           </button>
         )}
+        {configSlot}
       </div>
     </header>
   );

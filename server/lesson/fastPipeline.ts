@@ -13,16 +13,20 @@
  */
 
 import {
+  type ComprehensionCheck,
   type Domain,
   type LessonPlan,
   type TeachingBeat,
   type VisualAction,
+  type SourceRef,
+  type VideoRef,
   LessonError,
 } from '../../shared/contracts.ts';
 import { looksLikeEquation, solveEquation } from '../../shared/solver.ts';
 import { normaliseBeat, validateAction, validatePlan } from '../../shared/validate.ts';
 import { capabilitySheetForDomain, RELATION_TYPES } from '../../shared/registry.ts';
 import { completeResilient, extractJson, type ProviderConfig } from '../providers/index.ts';
+import { crawl, searchYouTube } from '../research/web.ts';
 
 export interface DefinitionItem {
   term: string;
@@ -42,11 +46,87 @@ export interface FastBuildResult {
 export interface FastPipelineHooks {
   status(stage: string, detail?: string): void;
   onAnswer?(answer: { explanation: string; definitions: DefinitionItem[]; finalAnswer: string }): void;
+  onResearch?(research: { sources: SourceRef[]; videos: VideoRef[] }): void;
   signal?: AbortSignal;
+  tutorDirectives?: string;
+  /** Prior-turn context — a circled region, a clicked node, the last answer. */
+  contextNote?: string;
 }
 
-function fastSystemPrompt(domain = 'general'): string {
+export function isWorkflowOrStructure(query: string): boolean {
+  const q = query.toLowerCase();
+  return (
+    /flow\s*ch[ao]t|flowchart|flow\s*chart|workflow|pipeline|architecture|diagram|graph\s*flow|sequence\s*diagram|block\s*diagram|state\s*machine/i.test(q) ||
+    /how\s+(?:a\s+|the\s+)?[\w\s-]+\s+works?|how\s+does\s+[\w\s-]+\s+work|working\s+of|phases\s+of|stages\s+of|steps\s+in|cycle\s+of/i.test(q) ||
+    /\b(processor|cpu|gpu|alu|compiler|interpreter|operating\s*system|kernel|http|tcp|dns|oauth|jwt|authentication|acid|ci\/cd|microservice|photosynthesis|krebs\s*cycle)\b/i.test(q)
+  );
+}
+
+function synthesizeWorkflowFlowchart(
+  question: string,
+  definitions: DefinitionItem[],
+  _webExcerpts: string
+): VisualAction {
+  let nodes: Array<{ id: string; label: string }> = [];
+  let edges: Array<{ from: string; to: string; label?: string }> = [];
+
+  const q = question.toLowerCase();
+  if (/processor|cpu/i.test(q)) {
+    nodes = [
+      { id: 'fetch', label: '1. Instruction Fetch (PC / Cache)' },
+      { id: 'decode', label: '2. Instruction Decode (Control Unit)' },
+      { id: 'execute', label: '3. Execute (ALU)' },
+      { id: 'memory', label: '4. Memory Access (RAM / Cache)' },
+      { id: 'writeback', label: '5. Write Back (Registers)' },
+    ];
+    edges = [
+      { from: 'fetch', to: 'decode', label: 'opcode' },
+      { from: 'decode', to: 'execute', label: 'signals' },
+      { from: 'execute', to: 'memory', label: 'addr/data' },
+      { from: 'memory', to: 'writeback', label: 'result' },
+    ];
+  } else if (definitions.length >= 3) {
+    nodes = definitions.slice(0, 5).map((d, i) => ({
+      id: `stage_${i + 1}`,
+      label: `${i + 1}. ${d.term}`,
+    }));
+    for (let i = 0; i < nodes.length - 1; i++) {
+      edges.push({ from: nodes[i].id, to: nodes[i + 1].id, label: 'next' });
+    }
+  } else {
+    nodes = [
+      { id: 'input', label: '1. Input / Request' },
+      { id: 'process', label: '2. Processing / Transformation' },
+      { id: 'validate', label: '3. Verification / Execution' },
+      { id: 'output', label: '4. Output / Final State' },
+    ];
+    edges = [
+      { from: 'input', to: 'process' },
+      { from: 'process', to: 'validate' },
+      { from: 'validate', to: 'output' },
+    ];
+  }
+
+  return {
+    actionId: `action-flowchart-${Date.now().toString(36)}`,
+    beatId: 'beat-flowchart',
+    type: 'CREATE_FLOWCHART',
+    semanticRole: 'PRIMARY',
+    target: 'workflow_flowchart',
+    priority: 'PRIMARY',
+    parameters: {
+      direction: 'LR',
+      title: question.slice(0, 50),
+      nodes,
+      edges,
+    },
+    relations: [],
+  };
+}
+
+function fastSystemPrompt(domain = 'general', tutorDirectives = ''): string {
   return `You are NEMO, an expert visual teacher who reasons deeply and draws on an infinite blackboard.
+${tutorDirectives ? `\nADAPTIVE TUTOR STRATEGY DIRECTIVES (from Personal Cognitive AI Engine):\n${tutorDirectives}\n` : ''}
 
 YOUR GOAL:
 Given a question, produce TWO synchronized outputs in ONE response:
@@ -58,11 +138,32 @@ CORE TEACHING RULES:
 - KEEP THE BOARD CANVAS VISUAL: The blackboard canvas is an infinite visual space for diagrams, graphs, geometric shapes, equations, arrows, data structures, state transitions, and step numbers. Do NOT output large text paragraphs or textbook definitions as canvas actions — the UI displays definitions and written matter in the dedicated Matter Section!
 - Visuals must be instructional and synchronized with narration.
 - Do NOT output raw code or exact screen coordinates. Use SEMANTIC RELATIONS to position items.
+- NEVER output a lone empty rectangle (DRAW_RECTANGLE) and arrow (DRAW_ARROW) for systems, workflows, architectures, processes, or "how things work".
+- FOR WORKFLOWS, ARCHITECTURES, PROCESSES, SYSTEM MECHANISMS (e.g. CPU, Compiler, Authentication, Network protocols, or when flowchart/workflow/graph is asked):
+  YOU MUST USE "CREATE_FLOWCHART", "CREATE_ARCHITECTURE_DIAGRAM", or "CREATE_BLOCK_DIAGRAM" in the visual plan!
+  Provide parameters:
+  - "direction": "LR" (left-to-right for sequential pipelines) or "TB" (top-to-bottom for hierarchies).
+  - "nodes": Array of 4 to 8 concrete functional components/stages with { "id": "stage_id", "label": "Component Label" }.
+    Example for CPU / Processor:
+    nodes: [
+      { "id": "fetch", "label": "1. Instruction Fetch (PC / Cache)" },
+      { "id": "decode", "label": "2. Instruction Decode (Control Unit)" },
+      { "id": "execute", "label": "3. Execute (ALU)" },
+      { "id": "memory", "label": "4. Memory Access (RAM)" },
+      { "id": "writeback", "label": "5. Write Back (Registers)" }
+    ]
+  - "edges": Array of directional links with { "from": "fetch", "to": "decode", "label": "opcode" }, etc.
 - Allowed relations: ${RELATION_TYPES.join(', ')}.
 - Allowed gaps: tight, normal, loose.
 - Give each visual object a stable target id (e.g. "array_1", "eq_1", "ptr_low", "vector_v") and reuse it to transform/highlight it.
 - Keep the explanation complete from start to finish. Never stop halfway.
-- Output 3 to 6 focused beats. Each beat should have 2 to 4 visual actions.
+- COMPREHENSION CHECK REQUIREMENT (EXTREMELY IMPORTANT):
+  After the beats, formulate ONE genuinely insightful, concept-testing multiple-choice challenge.
+  Rules for a mastery-grade comprehension question:
+  * NEVER ask shallow trivia, textbook recall, or definition lookups.
+  * Test deep conceptual intuition: pose a counterfactual ("What happens if...", "If we remove..."), an edge condition, or a classic misconception students frequently fall into.
+  * Options: Provide 3 or 4 compelling, realistic choices ("a", "b", "c", "d"). The incorrect options ("distractors") MUST represent plausible intuitive reasoning or common pitfalls rather than obviously silly answers.
+  * Clearly specify correctOptionId, and provide an illuminating, pedagogical rationale explaining the core intuition behind the answer.
 
 ALLOWED VISUAL CAPABILITIES (choose ONLY from this list):
 ${capabilitySheetForDomain(domain)}
@@ -77,6 +178,16 @@ Return ONLY a valid JSON object matching this structure (no markdown fences, no 
     { "term": "Key Concept 1", "definition": "Accurate definition or formula." }
   ],
   "finalAnswer": "Summary conclusion / final result",
+  "comprehensionCheck": {
+    "question": "One question testing understanding of THIS explanation",
+    "options": [
+      { "id": "a", "label": "First option" },
+      { "id": "b", "label": "Second option" },
+      { "id": "c", "label": "Third option" }
+    ],
+    "correctOptionId": "b",
+    "rationale": "One sentence explaining why that option is correct."
+  },
   "beats": [
     {
       "beatId": "beat-1",
@@ -185,6 +296,30 @@ function beatsFromAnswer(
   return beats;
 }
 
+/**
+ * Validate the model's comprehension-check object.
+ *
+ * Optional by contract: a malformed or missing check is simply dropped,
+ * never a reason to fail the whole lesson.
+ */
+function parseComprehensionCheck(raw: unknown): ComprehensionCheck | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const question = typeof r.question === 'string' ? r.question.trim() : '';
+  const rawOptions = Array.isArray(r.options) ? r.options : [];
+  const options = rawOptions
+    .filter((o): o is Record<string, unknown> => Boolean(o && typeof o === 'object'))
+    .map((o) => ({ id: String(o.id ?? '').trim(), label: String(o.label ?? '').trim() }))
+    .filter((o) => o.id && o.label);
+  const correctOptionId = typeof r.correctOptionId === 'string' ? r.correctOptionId.trim() : '';
+  const rationale = typeof r.rationale === 'string' ? r.rationale.trim() : '';
+
+  if (!question || options.length < 2 || !options.some((o) => o.id === correctOptionId)) {
+    return undefined;
+  }
+  return { question, options, correctOptionId, rationale };
+}
+
 const DOMAINS: readonly Domain[] = [
   'mathematics',
   'computer_science',
@@ -253,8 +388,8 @@ async function extendPlan(
       'answer. Do not repeat any beat listed above. Return ONLY a JSON object of the form ' +
       '{"beats":[...]} using the same beat and visualAction schema.',
     json: true,
-    maxTokens: 5000,
-    maxContinuations: 3,
+    maxTokens: 16000,
+    maxContinuations: 10,
     temperature: 0.2,
     signal: args.signal,
     onNotice: args.onNotice,
@@ -322,11 +457,65 @@ export async function buildFastLesson(
     }
   }
 
+  // Web Research & Component Extraction
+  hooks.status('RESEARCHING', 'Extracting technical structure & research sources');
+  let webExcerpts = '';
+  let discoveredSources: SourceRef[] = [];
+  let discoveredVideos: VideoRef[] = [];
+  try {
+    const researchTask = Promise.all([
+      crawl(trimmed, { results: 4, read: 2 }),
+      searchYouTube(trimmed, 2),
+    ]);
+    const timeoutPromise = new Promise<[{ results: any[]; pages: any[] }, any[]]>((_, reject) =>
+      setTimeout(() => reject(new Error('timeout')), 3200)
+    );
+    const [crawlRes, ytRes] = await Promise.race([researchTask, timeoutPromise]);
+
+    if (crawlRes?.results?.length) {
+      discoveredSources = crawlRes.results.map((r: any) => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.snippet,
+        source: r.source,
+      }));
+      const pageSnippets = (crawlRes.pages || [])
+        .map((p: any) => p.text.slice(0, 300))
+        .filter(Boolean);
+      const allSnippets = [
+        ...crawlRes.results.map((r: any) => `${r.title}: ${r.snippet}`),
+        ...pageSnippets,
+      ].slice(0, 5);
+      if (allSnippets.length > 0) {
+        webExcerpts = allSnippets.join('\n');
+      }
+    }
+    if (Array.isArray(ytRes)) {
+      discoveredVideos = ytRes;
+    }
+  } catch {
+    // Non-fatal: continue ungrounded if research times out
+  }
+
+  if (hooks.onResearch && (discoveredSources.length > 0 || discoveredVideos.length > 0)) {
+    hooks.onResearch({ sources: discoveredSources, videos: discoveredVideos });
+  }
+
   hooks.status('DESIGNING_VISUALS', 'Creating answer & visual plan');
 
-  const userPrompt = isEq && solvedAnswer
-    ? `Question: "${trimmed}"\nVerified Equation Solution: ${solvedAnswer}\nCreate the complete explanation, definitions, and visual drawing steps.`
-    : `Question: "${trimmed}"\nExplain this completely and create the blackboard visual sequence.`;
+  const contextPrefix = hooks.contextNote ? `Context from the ongoing session:\n${hooks.contextNote}\n\n` : '';
+  const workflowGuidance = isWorkflowOrStructure(trimmed)
+    ? '\nREQUIREMENT: This question asks for a workflow, architecture, process, or mechanism. Include a complete, detailed CREATE_FLOWCHART or CREATE_ARCHITECTURE_DIAGRAM with all functional stages connected by directional edges. Do NOT output plain empty rectangles or basic arrows!\n'
+    : '';
+  const webResearchContext = webExcerpts
+    ? `\nExtracted Technical Web Structure & Key References:\n${webExcerpts}\n`
+    : '';
+
+  const userPrompt = contextPrefix + webResearchContext + workflowGuidance + (
+    isEq && solvedAnswer
+      ? `Question: "${trimmed}"\nVerified Equation Solution: ${solvedAnswer}\nCreate the complete explanation, definitions, and visual drawing steps.`
+      : `Question: "${trimmed}"\nExplain this completely and create the blackboard visual sequence.`
+  );
 
   /*
    * Streamed, with retry, continuation and model fallback underneath.
@@ -339,20 +528,19 @@ export async function buildFastLesson(
   const recoveryNotes: string[] = [];
   let lastReport = 0;
   const { text: raw, model: answeringModel } = await completeResilient(cfg, {
-    system: fastSystemPrompt(inferredDomain),
+    system: fastSystemPrompt(inferredDomain, hooks.tutorDirectives),
     user: userPrompt,
     json: true,
     /*
-     * Deliberately modest, and the single biggest latency fix in the pipeline.
-     *
-     * A reasoning model sizes its thinking to the budget it is given: at
-     * 16,000 tokens this same request spent 147 seconds reasoning before
-     * emitting a character, then truncated anyway. At 6,000 the first
-     * characters arrive in about six seconds — and a plan that genuinely needs
-     * more room is continued rather than cut off, so nothing is lost.
+     * No artificial ceiling: some free/reasoning models were getting cut off
+     * a few dozen tokens into the JSON and the continuation loop couldn't dig
+     * them out of it. A per-call budget still exists (models need SOME cap to
+     * stream against), but it is generous now, and maxContinuations gives a
+     * model that is still short of a complete plan many more chances to
+     * finish rather than failing on "truncated JSON".
      */
-    maxTokens: 6000,
-    maxContinuations: 4,
+    maxTokens: 16000,
+    maxContinuations: 10,
     temperature: 0.2,
     signal: hooks.signal,
     onDelta: (_chunk, total) => {
@@ -454,7 +642,41 @@ export async function buildFastLesson(
     if (beat) validBeats.push(beat);
   }
 
+  // Workflow / Flowchart enforcement
+  if (isWorkflowOrStructure(trimmed)) {
+    const isMermaidAction = (type: string) =>
+      /^(CREATE_FLOWCHART|CREATE_ARCHITECTURE_DIAGRAM|CREATE_BLOCK_DIAGRAM|CREATE_SEQUENCE_DIAGRAM|CREATE_STATE_DIAGRAM|CREATE_CLASS_DIAGRAM|CREATE_MINDMAP|CREATE_TIMELINE|CREATE_ER_DIAGRAM)$/.test(
+        type
+      );
+    const hasMermaid = validBeats.some((b) => b.visualActions.some((a) => isMermaidAction(a.type)));
+
+    if (!hasMermaid) {
+      // Synthesize flowchart and clean up any placeholder rectangles/arrows
+      const flowchartAction = synthesizeWorkflowFlowchart(trimmed, definitions, webExcerpts);
+      for (const beat of validBeats) {
+        beat.visualActions = beat.visualActions.filter(
+          (a) => a.type !== 'DRAW_RECTANGLE' && a.type !== 'DRAW_ARROW' && a.type !== 'DRAW_SQUARE'
+        );
+      }
+      const targetBeatIndex = validBeats.length > 1 ? 1 : 0;
+      if (validBeats[targetBeatIndex]) {
+        flowchartAction.beatId = validBeats[targetBeatIndex].beatId;
+        validBeats[targetBeatIndex].visualActions.push(flowchartAction);
+      }
+    } else {
+      // Remove any redundant lone DRAW_RECTANGLE / DRAW_ARROW that might accompany the flowchart
+      for (const beat of validBeats) {
+        if (beat.visualActions.some((a) => isMermaidAction(a.type))) {
+          beat.visualActions = beat.visualActions.filter(
+            (a) => a.type !== 'DRAW_RECTANGLE' && a.type !== 'DRAW_ARROW' && a.type !== 'DRAW_SQUARE'
+          );
+        }
+      }
+    }
+  }
+
   const domain = normaliseDomain(parsed.domain);
+  const comprehensionCheck = parseComprehensionCheck(parsed.comprehensionCheck);
 
   /*
    * Completeness gate (brief sections 9 and 33).
@@ -506,6 +728,7 @@ export async function buildFastLesson(
     beats: validBeats,
     finalSummary: finalAnswer,
     status: 'READY',
+    ...(comprehensionCheck ? { comprehensionCheck } : {}),
   };
 
   const validation = validatePlan(lessonPlan);

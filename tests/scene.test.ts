@@ -76,9 +76,14 @@ describe('scene engine executes every demo plan', () => {
       const nodes = store.list();
       assert.ok(nodes.length > 4, `${name} produced only ${nodes.length} nodes`);
       for (const n of nodes) {
-        assert.ok(n.strokes.length > 0, `${n.id} has no strokes`);
-        const points = n.strokes.reduce((sum, s) => sum + s.points.length, 0);
-        assert.ok(points > 1, `${n.id} has no stroke points`);
+        if (n.renderPayload?.renderer === 'mermaid') {
+          assert.ok(n.renderPayload.source.length > 0, `${n.id} has no renderer source`);
+          assert.ok(n.renderPayload.semanticObjects.length > 0, `${n.id} has no semantic objects`);
+        } else {
+          assert.ok(n.strokes.length > 0, `${n.id} has no strokes`);
+          const points = n.strokes.reduce((sum, s) => sum + s.points.length, 0);
+          assert.ok(points > 1, `${n.id} has no stroke points`);
+        }
         assert.ok(n.localBounds.w > 0 && n.localBounds.h > 0, `${n.id} has empty bounds`);
         assert.ok(Number.isFinite(n.transform.x) && Number.isFinite(n.transform.y),
           `${n.id} was never placed`);

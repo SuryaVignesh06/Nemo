@@ -85,6 +85,30 @@ export function binarySearchPlan(lessonId: string, requestId: string, question: 
           { text: 'Halve the search space every step' },
           { target: 'subtitle', relations: below('title', 'tight') }
         ),
+        action(
+          'beat-1',
+          'CREATE_FLOWCHART',
+          'binary_search_overview',
+          {
+            direction: 'LR',
+            nodes: [
+              { id: 'start', label: 'Start' },
+              { id: 'midpoint', label: 'Calculate midpoint' },
+              { id: 'compare', label: 'Compare target' },
+              { id: 'found', label: 'Found' },
+              { id: 'left', label: 'Search left half' },
+              { id: 'right', label: 'Search right half' },
+            ],
+            edges: [
+              { from: 'start', to: 'midpoint' },
+              { from: 'midpoint', to: 'compare' },
+              { from: 'compare', to: 'found', label: 'equal' },
+              { from: 'compare', to: 'left', label: 'smaller' },
+              { from: 'compare', to: 'right', label: 'larger' },
+            ],
+          },
+          { target: 'binary-search-flow', relations: below('subtitle', 'normal'), priority: 'PRIMARY' }
+        ),
       ]
     ),
     beat(
@@ -99,7 +123,7 @@ export function binarySearchPlan(lessonId: string, requestId: string, question: 
           'DRAW_TEXT',
           'precondition',
           { text: 'Requires: the list is sorted' },
-          { target: 'precondition', relations: below('subtitle') }
+          { target: 'precondition', relations: below('binary-search-flow', 'loose') }
         ),
         action('beat-2', 'UNDERLINE_TEXT', 'emphasise_precondition', {}, {
           target: 'precondition',
@@ -309,6 +333,17 @@ export function binarySearchPlan(lessonId: string, requestId: string, question: 
       'Binary search repeatedly halves a sorted range: compare the target with the middle element, discard the half that cannot contain it, and repeat. Searching [3, 7, 10, 14, 18, 21, 27] for 18 finds it at index 4 in three comparisons. It runs in O(log n) time.',
     objective: 'Understand how binary search works and why it costs O(log n).',
     finalSummary: 'Sort the data, check the middle, discard the impossible half, repeat.',
+    comprehensionCheck: {
+      question: 'What would happen if the array was not sorted before running binary search for a target value?',
+      options: [
+        { id: 'a', label: 'It would still find the target, but take O(n) linear time.' },
+        { id: 'b', label: 'Discarding half could permanently eliminate the target, causing an incorrect "not found" result.' },
+        { id: 'c', label: 'The midpoint calculation would cause an out-of-bounds array indexing exception.' },
+        { id: 'd', label: 'The algorithm would loop indefinitely between the low and high pointers.' },
+      ],
+      correctOptionId: 'b',
+      rationale: 'Binary search relies strictly on sorted order to guarantee the target cannot reside in the discarded half; without sorting, the target might be in the discarded segment and never be checked.',
+    },
     beats,
     status: 'READY',
   };
@@ -449,6 +484,16 @@ export function equationPlan(
     answer: `${solution.original} gives ${solution.finalAnswer}.`,
     objective: 'Solve the equation by keeping both sides balanced.',
     finalSummary: `${solution.finalAnswer}. Each step undoes one operation, applied to both sides.`,
+    comprehensionCheck: {
+      question: 'When solving 2x + 5 = 17, why do we subtract 5 from both sides first rather than dividing by 2 first?',
+      options: [
+        { id: 'a', label: 'Dividing first is mathematically invalid.' },
+        { id: 'b', label: 'Subtracting 5 isolates the variable term 2x directly; dividing first would require dividing every single term (yielding x + 2.5 = 8.5).' },
+        { id: 'c', label: 'Because addition always takes precedence over division in algebra.' },
+      ],
+      correctOptionId: 'b',
+      rationale: 'Dividing first is allowed but requires dividing all terms: (2x + 5)/2 = 17/2 -> x + 2.5 = 8.5. Subtracting the constant first avoids introducing fractions.',
+    },
     beats,
     status: 'READY',
   };
@@ -617,6 +662,16 @@ export function trianglePlan(lessonId: string, requestId: string, question: stri
       'The area of a triangle is A = 1/2 x base x height, because a triangle fills exactly half of the rectangle that shares its base and height.',
     objective: 'Understand where A = 1/2 b h comes from.',
     finalSummary: 'Base times perpendicular height, halved.',
+    comprehensionCheck: {
+      question: 'Why does the formula for the area of ANY triangle always include the factor of 1/2?',
+      options: [
+        { id: 'a', label: 'Any triangle can be paired with an identical copy to form a parallelogram of area b × h.' },
+        { id: 'b', label: 'Because a triangle has only half as many sides as a square.' },
+        { id: 'c', label: 'The factor of 1/2 only strictly applies to right triangles and approximates other triangles.' },
+      ],
+      correctOptionId: 'a',
+      rationale: 'Any triangle forms exactly half of a parallelogram with the same base and perpendicular height, so its area is always exactly 1/2 × base × height.',
+    },
     beats,
     status: 'READY',
   };
@@ -774,6 +829,16 @@ export function benzenePlan(lessonId: string, requestId: string, question: strin
       'Benzene is a planar hexagonal C6H6 molecule stabilized by six delocalized pi electrons forming a continuous aromatic pi system.',
     objective: 'Understand Benzene structure, Kekule resonance, and aromatic pi-electron delocalization.',
     finalSummary: 'Planar C6H6 ring with 6 delocalized pi-electrons providing aromatic stability.',
+    comprehensionCheck: {
+      question: 'Why are all six carbon-carbon bond lengths in benzene completely identical (139 pm) rather than alternating between single and double bonds?',
+      options: [
+        { id: 'a', label: 'The six π electrons are fully delocalized into continuous ring clouds above and below the planar carbon skeleton.' },
+        { id: 'b', label: 'The molecule rapidly oscillates back and forth between two distinct Kekulé isomers.' },
+        { id: 'c', label: 'The attached hydrogen atoms compress the double bonds to match the single bonds.' },
+      ],
+      correctOptionId: 'a',
+      rationale: 'Benzene is a true resonance hybrid: all six 2p orbitals overlap equally in a unified delocalized π system, giving each bond an identical intermediate order of 1.5.',
+    },
     beats,
     status: 'READY',
   };
@@ -961,6 +1026,16 @@ export function physicsPlan(lessonId: string, requestId: string, question: strin
       'The block accelerates along the horizontal surface at a ≈ 2.87 m/s² to the right (F_net,x = 5.74 N, m = 2 kg).',
     objective: 'Calculate normal force, kinetic friction, net horizontal force, and acceleration using Newton second law.',
     finalSummary: 'Block accelerates right at a = 2.87 m/s² (F_net,x = 5.74 N, m = 2 kg).',
+    comprehensionCheck: {
+      question: 'Why does pulling the block at an upward 30° angle reduce friction compared to pulling it purely horizontally?',
+      options: [
+        { id: 'a', label: 'The upward component of force (F·sin 30°) relieves part of the block’s weight, reducing normal force N and thus friction f_k = μ·N.' },
+        { id: 'b', label: 'The coefficient of kinetic friction μ decreases at higher pull angles.' },
+        { id: 'c', label: 'Gravity exerts less downward force on objects moving at an angle.' },
+      ],
+      correctOptionId: 'a',
+      rationale: 'In vertical equilibrium, N = mg - F·sin(30°). The upward pull lifts the block slightly, decreasing the normal contact force and directly lowering kinetic friction.',
+    },
     beats,
     status: 'READY',
   };
@@ -985,7 +1060,7 @@ export function integralPlan(lessonId: string, requestId: string, question: stri
           'beat-1',
           'WRITE_EQUATION',
           'integral_question',
-          { expression: '\\int_0^2 x^2 dx' },
+          { expression: '∫₀² x² dx' },
           {
             target: 'question-eq',
             priority: 'PRIMARY',
@@ -999,8 +1074,8 @@ export function integralPlan(lessonId: string, requestId: string, question: stri
     beat(
       'beat-2',
       2,
-      'Plot Coordinate Axes & Curve y = x^2',
-      'Draw coordinate axes and plot parabolic function y = x^2.',
+      'Plot Coordinate Axes & Curve y = x²',
+      'Draw coordinate axes and plot parabolic function y = x².',
       'We start by drawing coordinate axes and plotting the parabola y equals x squared.',
       [
         action(
@@ -1021,7 +1096,7 @@ export function integralPlan(lessonId: string, requestId: string, question: stri
           'beat-2',
           'WRITE_LABEL',
           'function_label',
-          { text: 'y = x^2', color: 'amber' },
+          { text: 'y = x²', color: 'amber' },
           { target: 'func-label', relations: [{ type: 'RIGHT_OF', target: 'curve', gap: 'tight' }] }
         ),
       ]
@@ -1100,21 +1175,21 @@ export function integralPlan(lessonId: string, requestId: string, question: stri
           'beat-6',
           'SHOW_ANTIDERIVATIVE',
           'antiderivative_step',
-          { expression: '\\int x^2 dx = \\frac{x^3}{3} + C' },
+          { expression: '∫ x² dx = x³/3 + C' },
           { target: 'anti-step', relations: [{ type: 'RIGHT_OF', target: 'axes', gap: 'normal' }] }
         ),
         action(
           'beat-6',
           'EVALUATE_BOUNDS',
           'bounds_step',
-          { expression: '\\left[\\frac{x^3}{3}\\right]_0^2 = \\frac{2^3}{3} - \\frac{0^3}{3} = \\frac{8}{3}' },
+          { expression: '[x³/3]₀² = 2³/3 - 0³/3 = 8/3' },
           { target: 'bounds-step', priority: 'PRIMARY', relations: below('anti-step', 'tight') }
         ),
         action(
           'beat-6',
           'SHOW_FINAL_ANSWER',
           'final_answer',
-          { answer: '\\int_0^2 x^2 dx = \\frac{8}{3}' },
+          { answer: '∫₀² x² dx = 8/3 ≈ 2.67' },
           { target: 'final-answer', priority: 'PRIMARY', relations: below('bounds-step', 'normal') }
         ),
       ]
@@ -1148,6 +1223,16 @@ export function integralPlan(lessonId: string, requestId: string, question: stri
       'The definite integral of x^2 from 0 to 2 equals 8/3, representing the exact accumulated area under y = x^2.',
     objective: 'Evaluate definite integral using antiderivative bounds and connect to area under curve.',
     finalSummary: 'Definite integral = exact area under y = x^2 on [0, 2] = 8/3.',
+    comprehensionCheck: {
+      question: 'Geometrically, what does the definite integral ∫₀² x² dx calculate?',
+      options: [
+        { id: 'a', label: 'The slope of the tangent line to the parabola at x = 2.' },
+        { id: 'b', label: 'The exact area of the curved 2D region bounded between y = x², the x-axis, and the vertical lines x = 0 and x = 2.' },
+        { id: 'c', label: 'The arc length of the parabolic curve from (0,0) to (2,4).' },
+      ],
+      correctOptionId: 'b',
+      rationale: 'The definite integral represents the infinite limit of Riemann sum rectangle areas, yielding the exact accumulated area under the curve y = f(x) over the interval [0, 2].',
+    },
     beats,
     status: 'READY',
   };
@@ -1240,6 +1325,99 @@ export function esp32LedPlan(lessonId: string, requestId: string, question: stri
     answer: 'The ESP32 turns on the LED by setting GPIO2 HIGH. That creates a voltage across the series path, current flows through a 220 ohm limiting resistor and the LED to ground, and the LED emits light.',
     objective: 'Trace an ESP32 LED command from code through GPIO state and circuit current to emitted light.',
     finalSummary: 'digitalWrite sets GPIO2 HIGH; the resistor limits current; the LED turns ON and current returns to ground.',
+    comprehensionCheck: {
+      question: 'Why is a current-limiting resistor strictly required in series with an LED connected to an ESP32 GPIO pin?',
+      options: [
+        { id: 'a', label: 'To reduce the GPIO digital clock frequency down to DC.' },
+        { id: 'b', label: 'An active LED has very low internal resistance and would draw excessive current, destroying the LED or frying the ESP32 GPIO pin.' },
+        { id: 'c', label: 'To step up the ESP32 3.3V voltage so the LED can turn on.' },
+      ],
+      correctOptionId: 'b',
+      rationale: 'Diodes have exponential I-V curves; without a series resistor to drop the remaining voltage (3.3V - V_forward) and limit current to ~10-15 mA, the circuit draws destructive current.',
+    },
+    beats,
+    status: 'READY',
+  };
+}
+
+/* -------------------------------------------------------- brain structure */
+
+export function brainStructurePlan(lessonId: string, requestId: string, question: string): LessonPlan {
+  seq = 0;
+  const beats: TeachingBeat[] = [
+    beat(
+      'beat-1',
+      1,
+      'Introduce Brain Structure & Gross Anatomy',
+      'Display lesson title and overview of the human brain divisions.',
+      'The human brain is structured into two cerebral hemispheres, the cerebellum, and the brain stem.',
+      [
+        action('beat-1', 'WRITE_TITLE', 'lesson_title', { text: 'Human Brain Structure & Neuroanatomy' }, { target: 'title' }),
+        action('beat-1', 'WRITE_SUBTITLE', 'lesson_sub', { text: 'Cerebrum, Cortical Lobes, Cerebellum & Brain Stem' }, { target: 'subtitle', relations: below('title', 'tight') }),
+        action('beat-1', 'CAMERA_FIT', 'frame_title', {}, {}),
+      ]
+    ),
+    beat(
+      'beat-2',
+      2,
+      'Procedural 3D Wireframe Brain',
+      'Generate procedural wireframe of cerebral hemispheres, cortical folds, and fissures.',
+      'Here is the procedural wireframe brain displaying the dual hemispheres, cortical folds, longitudinal fissure, cerebellum, and brain stem.',
+      [
+        action(
+          'beat-2',
+          'CREATE_WIREFRAME_BRAIN',
+          'wireframe_brain_model',
+          { labels: true, color: 'blue' },
+          { target: 'brain', priority: 'PRIMARY', relations: below('subtitle', 'normal') }
+        ),
+        action('beat-2', 'CAMERA_FOCUS', 'focus_brain', {}, { target: 'brain' }),
+      ]
+    ),
+    beat(
+      'beat-3',
+      3,
+      'Explain the Four Cerebral Lobes',
+      'Detail functional specializations of frontal, parietal, temporal, and occipital lobes.',
+      'The frontal lobe directs decision making, the parietal lobe decodes sensory touch, the temporal lobe processes language, and the occipital lobe interprets vision.',
+      [
+        action('beat-3', 'WRITE_LABEL', 'frontal_lbl', { text: '• Frontal Lobe: Executive control, reasoning & motor planning', color: 'amber' }, { target: 'lbl-frontal', relations: below('brain', 'normal') }),
+        action('beat-3', 'WRITE_LABEL', 'parietal_lbl', { text: '• Parietal Lobe: Somatosensory spatial awareness & touch', color: 'chalk' }, { target: 'lbl-parietal', relations: below('lbl-frontal', 'tight') }),
+        action('beat-3', 'WRITE_LABEL', 'temporal_lbl', { text: '• Temporal Lobe: Memory formation, auditory processing & speech', color: 'green' }, { target: 'lbl-temporal', relations: below('lbl-parietal', 'tight') }),
+      ]
+    ),
+    beat(
+      'beat-4',
+      4,
+      'Cerebellum & Brain Stem Autonomic Functions',
+      'Detail motor coordination in the cerebellum and vital reflexes in the brain stem.',
+      'The cerebellum governs coordination and balance, while the brain stem regulates autonomic survival functions like breathing and heart rate.',
+      [
+        action('beat-4', 'WRITE_LABEL', 'cerebellum_lbl', { text: '• Cerebellum: Coordination, fine motor accuracy & posture', color: 'violet' }, { target: 'lbl-cerebellum', relations: below('lbl-temporal', 'tight') }),
+        action('beat-4', 'WRITE_LABEL', 'stem_lbl', { text: '• Brain Stem: Cardiac pulse, respiration & visceral reflexes', color: 'cyan' }, { target: 'lbl-stem', relations: below('lbl-cerebellum', 'tight') }),
+        action('beat-4', 'SHOW_FINAL_ANSWER', 'brain_summary', { answer: 'Brain Divisions: Cerebrum (cognition) + Cerebellum (motor) + Brain Stem (life support)' }, { target: 'summary-box', priority: 'PRIMARY', relations: below('lbl-stem', 'normal') }),
+      ]
+    ),
+  ];
+
+  return {
+    lessonId,
+    requestId,
+    question,
+    domain: 'biology',
+    answer: 'The human brain comprises three primary anatomical divisions: the cerebrum (split into two hemispheres and four functional lobes: frontal, parietal, temporal, and occipital), the cerebellum (responsible for motor coordination, balance, and precision), and the brain stem (which connects to the spinal cord and manages autonomic survival functions including breathing and cardiac regulation).',
+    objective: 'Understand human brain anatomy, the three major structural divisions, and cortical functional specializations.',
+    finalSummary: 'The cerebrum executes higher cognition, the cerebellum coordinates movement, and the brain stem maintains vital autonomic life support.',
+    comprehensionCheck: {
+      question: 'If an individual suffers acute damage localized specifically to the cerebellum, which neurological deficit is most characteristic?',
+      options: [
+        { id: 'a', label: 'Immediate cessation of involuntary breathing and autonomic heart rate control.' },
+        { id: 'b', label: 'Ataxia: profound impairment in motor coordination, balance, and precision, while conscious thought remains intact.' },
+        { id: 'c', label: 'Complete loss of executive decision-making and personality alteration.' },
+      ],
+      correctOptionId: 'b',
+      rationale: 'The cerebellum acts as the brain’s motor coordination and calibration engine (damage produces cerebellar ataxia); the brain stem manages respiration, and the frontal lobe controls executive decision-making.',
+    },
     beats,
     status: 'READY',
   };
@@ -1264,6 +1442,7 @@ export function mockPlanFor(lessonId: string, requestId: string, question: strin
     return equationPlan(lessonId, requestId, question, solution);
   }
 
+  if (/brain|neuro|cerebr|cort(ex|ical)/.test(q)) return brainStructurePlan(lessonId, requestId, question);
   if (/binary\s*search/.test(q)) return binarySearchPlan(lessonId, requestId, question);
   if (/esp32/.test(q) && /(led|light|gpio|turn\s*on)/.test(q)) return esp32LedPlan(lessonId, requestId, question);
   if (/benzene|aromatic|chemistry/.test(q)) return benzenePlan(lessonId, requestId, question);
@@ -1273,7 +1452,7 @@ export function mockPlanFor(lessonId: string, requestId: string, question: strin
 
   throw new LessonError(
     'UNSUPPORTED',
-    'Demo Mode only covers the scripted scenarios: "How does an ESP32 turn on an LED?", "Explain binary search", "Benzene chemistry structure", "Physics block force & friction", "Definite integral area under curve", a linear equation such as "2x + 5 = 17", and "Explain the area of a triangle". Switch to a live provider in the config panel to ask anything else.'
+    'Demo Mode only covers the scripted scenarios: "Human brain structure", "How does an ESP32 turn on an LED?", "Explain binary search", "Benzene chemistry structure", "Physics block force & friction", "Definite integral area under curve", a linear equation such as "2x + 5 = 17", and "Explain the area of a triangle". Switch to a live provider in the config panel to ask anything else.'
   );
 }
 

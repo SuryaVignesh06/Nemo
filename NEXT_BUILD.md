@@ -1,362 +1,2823 @@
-# NEMO — Build Handoff & Next-Build Plan
+# ================================================================
+# NEMO
+# IMPLEMENTATION SPECIFICATION
+# UNIFIED VISUAL INTELLIGENCE + MERMAID INTEGRATION
+# ================================================================
 
-**Status of this document:** written at the end of build session 1. Nothing in the codebase was
-changed after the last verification run described below.
+You are the primary implementation agent for NEMO.
 
-**Read this first if you are picking the project up.** It tells you exactly what exists, what is
-proven to work, what is unproven, what is broken, and what to build next in priority order.
-
----
-
-## 0. TL;DR — where the project actually stands
-
-The MVP is **functional end to end in Demo Mode**. A learner types a question, the backend produces a
-validated semantic lesson plan, and the browser draws it live on a black canvas with handwriting,
-diagrams, pointers, camera moves and a pen — and the lesson reaches a real `COMPLETED` state.
-
-What is **not** proven: the live-model path (Z.AI / OpenRouter / Gemini) has never been run with a
-real API key, and ElevenLabs narration has never been heard. Those are the two biggest risks and
-they are items **N1** and **N2** below.
-
-| | |
-| --- | --- |
-| Tests | 71 passing (`npm test`) |
-| Typecheck | Clean (`npm run typecheck`) |
-| Lint | 10 warnings, 0 errors (`npm run lint`) |
-| Browser | Binary search **verified in Chromium**, reached `Completed` |
-| Manim | **Verified** — rendered a real 557 KB MP4, 39 animations |
-| Live LLM | **NOT VERIFIED** — no key was available |
-| Voice | **NOT VERIFIED** — no key was available |
-
----
-
-## 1. What was built (session 1)
-
-### 1.1 Shared contracts and the capability registry — `shared/`
-
-| File | What it is |
-| --- | --- |
-| `registry.ts` | The closed semantic capability catalog, transcribed from both registry PDFs. **377 capabilities** across 32 sections; **92 have executors** in this build. Aliases (`DRAW_GRAPH` → `PLOT_FUNCTION`) resolve to canonical types. |
-| `contracts.ts` | `LessonPlan`, `TeachingBeat`, `VisualAction`, `SceneNode`, `InkStroke`, `LessonEvent`, the `FailureCode` taxonomy, and the `LessonError` class. |
-| `validate.ts` | Enforces registry §31: rejects raw code, strips model-supplied coordinates, rejects unknown/non-executable capabilities, rejects incomplete plans and placeholder phrasing ("etc.", "continue similarly"), requires the final beat to conclude. |
-| `solver.ts` | A **real** recursive-descent linear-equation parser and solver. Handles coefficients, constants, parentheses, unary minus, division, variables on both sides. Verifies every answer by substitution. |
-
-The critical property, implemented throughout: **the model never emits executable code and never owns
-a coordinate.** It picks capability names from a closed list and describes semantic relations.
-
-### 1.2 Backend — `server/`
+You are working inside an existing NEMO repository.
 
-| File | What it is |
-| --- | --- |
-| `app.ts` | HTTP surface: `POST /api/lesson` (SSE), `POST /api/solve`, `POST /api/voice`, `GET /api/health`, `GET /api/registry`. Stale-request protection via an in-flight `AbortController` per session. Never logs or echoes keys. |
-| `standalone.ts` | Runs the API on its own port (`npm run api`), with a dependency-free `.env` loader. |
-| `providers/index.ts` | Z.AI (primary, OpenAI-compatible, default `glm-4.6`), OpenRouter, Gemini, and an explicit Mock. Maps HTTP status → `MISSING_CREDENTIALS` / `RATE_LIMIT` / `UNAVAILABLE` / `TIMEOUT`. Includes a robust `extractJson` that survives fences, prose and braces inside strings. |
-| `lesson/prompts.ts` | The four staged system prompts. The Visual Director prompt embeds the generated capability sheet, the relation vocabulary and the priority model. |
-| `lesson/pipeline.ts` | `analyze → solve → plan → direct → validate`. Equations bypass the model's arithmetic entirely and use `shared/solver.ts`. |
-| `lesson/mockPlans.ts` | Three deterministic offline lessons. The equation plan is **generated from the solver**, so Demo Mode solves any linear equation, not just the scripted one. |
-| `voice/index.ts` | ElevenLabs only. No browser-speech fallback anywhere. |
+NEMO is an AI-powered real-time visual teacher.
 
-The backend runs as **Vite middleware** (`nemoApi()` in `vite.config.ts`) so the demo is one command,
-while still being a real Node server that holds the keys.
+The application must understand a learner's question, solve it completely, decide how to teach it, select the most useful visual representation, build that visual deterministically, render it, narrate it, critique it, repair it when necessary, and ask a comprehension question afterward.
 
-### 1.3 Frontend — `src/`
+The critical objective of this task is:
 
-| File | What it is |
-| --- | --- |
-| `handwriting/glyphs.ts` | A stroke-based font: every glyph is the sequence of pen strokes a hand makes. Full A–Z, a–z, 0–9, and ~30 operators/punctuation. |
-| `handwriting/strokes.ts` | Seeded RNG (FNV-1a + mulberry32), Catmull-Rom smoothing, low-frequency wobble, and shape builders (circle, ellipse, arc, line, polyline, rect, arrow, brace, highlight band). |
-| `scene/store.ts` | Authoritative scene state. Relation-based placement, priority-ordered anti-overlap with a minimum-translation-vector solver, transitive attachment exemption, camera framing, `checkCollisions` PASS/FAIL. |
-| `scene/execute.ts` | The heart of the design: ~70 `case` branches turning each allowlisted capability into ink + an animation description. |
-| `presenter/presenter.ts` | Live playback. One action at a time with real durations; every action reaches `COMPLETED` / `FAILED` / `CANCELLED`. |
-| `presenter/voice.ts` | Narration playback with per-beat prefetch. |
-| `canvas/BoardCanvas.tsx` | The board. Progressive ink by stroke length, a pen that rides the real ink frontier, pan/zoom, dot grid. |
-| `components/` | `AskBar` (hero → docked), `ConfigPanel` (top-right pill), `StatusStrip` (stage, beat/action counters, execution log). |
-| `hooks/` | `useSettings` (localStorage config), `useLesson` (SSE consumption + presenter driving). |
+INTEGRATE MERMAID DEEPLY INTO NEMO WITHOUT BREAKING OR REPLACING MANIM OR MANIMGL.
 
-### 1.4 Manim backend — `manim/`
+Mermaid must become a first-class visual capability alongside:
 
-`nemo_compiler.py` maps allowlisted capabilities to Mobjects through a fixed `ADAPTERS` table.
-No `eval`, no `exec`, no path from a model string to Python. `extract_plan.py` pulls a validated plan
-out of the SSE stream.
+- Mermaid
+- Manim
+- ManimGL
+- NEMO native semantic visual primitives
+- retrieved web images
+- screenshots / captured references
+- optional image annotation layers
 
-### 1.5 Dev tooling — `scripts/`
+The resulting system must choose the right representation for the teaching objective.
 
-`snapshot.ts` + `snapshot.py` rasterise the scene engine's output to PNG headlessly. This is how the
-three scenarios were visually verified without a browser, and it is the fastest way to check a
-layout change.
+Do not force one renderer to do everything.
 
-```bash
-node scripts/snapshot.ts binary | python scripts/snapshot.py board.png
-```
+Do not create disconnected visualization systems.
 
----
+Create one unified semantic visual architecture.
 
-## 2. Verification status — be precise about this
+# ================================================================
+# 1. FIRST ACTION — INSPECT THE REPOSITORY
+# ================================================================
+
+Before writing code:
+
+1. Inspect the entire repository.
+2. Identify the existing:
+   - frontend
+   - backend
+   - API routes
+   - model providers
+   - LangGraph workflow
+   - agent definitions
+   - state definitions
+   - scene graph
+   - visual registry
+   - layout system
+   - Manim integration
+   - ManimGL integration
+   - render worker
+   - canvas
+   - image handling
+   - web/resource search
+   - screenshot/image processing
+   - chat streaming
+   - database
+   - storage
+   - tests
+   - environment configuration
+3. Identify whether Mermaid is already installed.
+4. Inspect package.json / pnpm-lock / package-lock / yarn.lock.
+5. Inspect Python dependencies.
+6. Reuse existing abstractions.
+7. Do not duplicate functionality.
+8. Do not rewrite unrelated modules.
+9. Do not remove existing Manim or ManimGL functionality.
+10. Do not create a second competing scene graph.
+
+Before implementation, create an internal implementation plan based on the real repository.
+
+# ================================================================
+# 2. NON-NEGOTIABLE ARCHITECTURAL PRINCIPLE
+# ================================================================
+
+NEMO must have ONE semantic visual orchestration architecture.
+
+The model decides:
+
+WHAT should be taught
+WHY it should be visualized
+WHAT relationship or transformation matters
+WHICH visual capability is appropriate
+
+The registry decides:
+
+WHAT visual capabilities actually exist
+
+The renderer selector decides:
+
+WHICH renderer should execute the capability
+
+The layout system decides:
+
+WHERE things go
+
+The timeline decides:
+
+WHEN things happen
+
+The renderers decide:
+
+HOW the visual is rendered
+
+The critic decides:
+
+WHETHER the rendered result is acceptable
+
+The complete architecture:
+
+USER
+ ↓
+QUESTION ANALYZER
+ ↓
+SOLVER
+ ↓
+ANSWER REVIEWER
+ ↓
+TEACHING DIRECTOR
+ ↓
+VISUAL DIRECTOR
+ ↓
+VISUAL CAPABILITY REGISTRY
+ ↓
+RENDERER SELECTOR
+ ├── MERMAID
+ ├── MANIM
+ ├── MANIMGL
+ ├── NEMO NATIVE
+ └── RETRIEVED IMAGE / IMAGE ANNOTATION
+ ↓
+SEMANTIC SCENE
+ ↓
+DETERMINISTIC LAYOUT
+ ↓
+RENDER
+ ↓
+VISUAL CRITIC
+ ↓
+REPAIR
+ ↓
+VOICE
+ ↓
+COMPREHENSION CHECK
+ ↓
+ADAPTATION
+
+# ================================================================
+# 3. MERMAID'S ROLE
+# ================================================================
+
+Mermaid is a STRUCTURE AND RELATIONSHIP renderer.
+
+Use Mermaid when the learner benefits from seeing:
+
+- process flow
+- decision flow
+- software architecture
+- sequence of interactions
+- protocol communication
+- state transitions
+- class relationships
+- entity relationships
+- block relationships
+- conceptual hierarchies
+- dependency relationships
+- system architecture
+- data flow
+- embedded communication flow
+- algorithm overview
+- hardware/software interaction
+
+Mermaid must NOT replace Manim for:
+
+- equations
+- mathematical derivation
+- graph transformations
+- Riemann sums
+- physics motion
+- vectors
+- forces
+- signal waveforms
+- continuous functions
+- algorithm execution animation
+- semiconductor carrier motion
+- electron/hole movement
+- charge diffusion
+- electric fields
+- circuit dynamics
+- synchronized code-to-hardware motion
+- detailed pedagogical transitions
+- 3D geometry
+
+Mermaid must NOT replace ManimGL for:
+
+- silicon lattice
+- 3D semiconductor structures
+- 3D MOSFET
+- 3D chip/package
+- 3D hardware
+- spatial mathematics
+- 3D physics
+- wormholes
+- spacetime curvature
+- other genuinely 3D explanations
 
-### VERIFIED ✅
+# ================================================================
+# 4. THE KEY NEW CAPABILITY:
+# HYBRID VISUAL LESSONS
+# ================================================================
 
-| What | Evidence |
-| --- | --- |
-| 71 tests pass | `node --test tests/*.test.ts` — 0 failures |
-| Typecheck clean | `tsc -b --force` — no output |
-| Equation solver correct | `2x+5=17 → x=6`, `3(x-2)=9 → x=5`, `x/2+3=8 → x=10`, `4x+3=x+18 → x=5`, `-2x+1=9 → x=-4`, all verified by substitution |
-| Backend endpoints | `curl` against `/api/health`, `/api/solve`, `/api/registry` — all correct |
-| SSE lesson stream | All three scenarios streamed: 11 beats/31 actions, 4/14, 7/16. Zero beats with no actions. |
-| Scene engine | 26 scene tests: every action reaches an executor, every node has real ink and resolved placement, no protected overlaps, deterministic ink across replays |
-| Visual output | Three PNG snapshots inspected — handwriting readable, geometry correct, layout clean |
-| **Live browser** | **Chromium: "Explain binary search." reached `Completed`.** Full lesson drawn, pointers on correct cells, found cell highlighted, `O(log n)` circled, summary written |
-| Manim render | `media/videos/nemo_compiler/480p15/nemo_binary_search.mp4`, 557 KB, 39 animations, exit 0 |
-| Demo Mode refusal | Unscripted question → explicit `UNSUPPORTED`, never an unrelated scene |
+NEMO must support multiple renderers in one lesson.
 
-### NOT VERIFIED ❌
+Example:
 
-| What | Why | Risk |
-| --- | --- | --- |
-| **Z.AI live path** | No API key available in this environment | **HIGH** — the whole live-model pipeline is untested against a real model |
-| **OpenRouter / Gemini** | Same | MEDIUM |
-| **ElevenLabs narration** | No API key | **HIGH** — no audio has ever played |
-| Browser: equation + triangle | The Chromium run was interrupted after binary search | LOW — engine-level tests and PNG snapshots cover the same rendering |
-| Stale-request guard in the browser | Test interrupted before that step | MEDIUM — server-side logic is sound but the UI path is unproven |
-| Progressive-drawing sampling | Interrupted; early-vs-final screenshots exist and differ, but no numeric series | LOW |
-| Console-error sweep | Interrupted before the report was written | MEDIUM |
-| Production build (`npm run build`) | Never run | MEDIUM — the API is dev-server middleware only; see **N7** |
+User:
+"Explain I2C."
+
+Lesson:
+
+BEAT 1:
+Mermaid sequence diagram
 
----
+BEAT 2:
+Manim SCL/SDA waveform animation
+
+BEAT 3:
+NEMO native ESP32 + sensor circuit
+
+BEAT 4:
+voice narration
+
+BEAT 5:
+quick check
 
-## 3. Known defects — fix these first
+Another example:
 
-### D1. The narration caption and ask bar cover the bottom of the board 🔴
+User:
+"Explain a MOSFET."
 
-**Seen in the Chromium screenshot.** `O(log n)` and the summary line are partly hidden behind the
-narration caption (`.narration`, `bottom: 104px`) and the ask bar. The spec explicitly requires
-"verify canvas is not obstructed" (§66).
+Beat 1:
+Mermaid conceptual relationship diagram
 
-**Fix:** make the camera framing viewport-aware — reserve the bottom ~200px and the top ~70px as
-non-content area. `cameraForBounds` in `src/scene/store.ts` takes a viewport; pass it an *effective*
-viewport that excludes the chrome, or add a `safeInsets` parameter. Also consider auto-hiding the
-narration caption a second after the beat's audio ends.
+MOSFET
+ ├── Gate
+ ├── Source
+ ├── Drain
+ └── Channel
 
-### D2. Highlight bands over thin markers read as blocks 🟡
+Beat 2:
+Manim device diagram
 
-`HIGHLIGHT` on an equation draws a filled amber band. Over a one-line equation it looks like a
-redaction bar rather than emphasis (visible on "18 > 14"). Alpha was reduced to 0.12, and the
-triangle plan was switched to `PULSE`, but the underlying builder is still crude.
+Beat 3:
+Manim animation of gate voltage and channel formation
 
-**Fix:** in `highlightStrokes`, use a marker-pen look — a band that covers only the text's x-height,
-with a soft leading/trailing taper, rather than the full bounding box.
+Beat 4:
+ManimGL optional 3D semiconductor structure
 
-### D3. `resolveCollisions` is O(passes × n²) per insertion 🟡
+Do NOT make each renderer a separate lesson.
 
-Fine at ~30 nodes. A 60-beat lesson with 200 nodes will get sluggish because it runs on every
-insertion and again after every `move`.
+They belong to ONE lesson timeline.
 
-**Fix:** spatial hash or a simple grid bucket keyed on node bounds.
+# ================================================================
+# 5. INSTALL MERMAID PROPERLY
+# ================================================================
 
-### D4. Lint warnings about store mutation during render 🟢
+Install Mermaid into the actual frontend/application package.
 
-10 oxlint warnings in `BoardCanvas.tsx` and `useLesson.ts`. The `BoardCanvas` ones are false
-positives for the external-store pattern (the store is deliberately the authority, not React state).
-Two in `useLesson.ts` are genuine:
+Use the repository's existing package manager.
 
-- `useMemo(() => Math.random() ...)` for `sessionId` — should be `useState(() => ...)`.
-- `voiceRef.current` lazy-init read during render — should be `useState(() => new VoiceController(...))`.
+Prefer the official npm package:
 
-*(This fix was identified but deliberately not applied, per the instruction to stop.)*
+mermaid
 
-### D5. `WRITE_FRACTION` renders numerator/denominator but is never used 🟢
+Do not use:
 
-The builder exists and works; no plan or prompt exercises it. `A = 1/2 b h` is written inline as text
-instead. Either use it in the triangle plan or drop it from the executable set so the registry's
-`implemented` flag stays honest.
+- CDN-only integration
+- Mermaid website iframe
+- external Mermaid editor
+- remote script injection
 
----
+Use the package locally.
 
-## 4. NEXT BUILD — priority order
+Also inspect the currently installed Mermaid version and pin it through the normal project dependency mechanism.
 
-### N1. Verify the live Z.AI path 🔴 CRITICAL — do this first
+Do not blindly choose an outdated version.
 
-Nothing else matters if the live model path does not work. Everything downstream of it is tested;
-this specific link is not.
+Use the currently compatible version with the existing application.
 
-**Steps:**
-1. Put a real key in `.env` (`ZAI_API_KEY`) or the config panel.
-2. Run each of the three demo questions on the live provider, plus two off-script ones
-   (`"Explain how a binary search tree works"`, `"Explain photosynthesis"`).
-3. Watch the execution log (the `log` toggle in the status strip) for `REJECT_*` reasons.
+Also inspect whether the chosen Mermaid layout functionality requires an additional ELK dependency.
 
-**What will probably break, in likelihood order:**
+If ELK support is needed and not bundled, install the required package as a real project dependency.
 
-| Likely failure | Where to look | Fix shape |
-| --- | --- | --- |
-| Director returns a beat with zero valid actions → whole plan rejected | `pipeline.ts` `direct()` | Add a **repair pass**: re-prompt the director for just the failed beats, quoting the rejection reasons. Currently the whole lesson fails. |
-| Model invents an id, then references a different one | `store.resolve()` | Already falls back to prefix and semanticRole matching; may need fuzzy matching or a post-pass that rewrites dangling references. |
-| Model exceeds `max_tokens` on the director call (12k) and returns truncated JSON | `extractJson` throws `INVALID_RESPONSE` | Chunk the director call: one request per 3–4 beats instead of one for the whole lesson. **This is the single most valuable robustness change.** |
-| `response_format: json_object` unsupported by the chosen model | `providers/index.ts` | Detect the 400 and retry without the flag. |
-| Model picks a catalogued-but-not-executable capability (e.g. `CREATE_MOLECULE`) | `validate.ts` | Expected and handled — but for a chemistry question it means every action fails. See **N5**. |
+Verify all installation changes in the lockfile.
 
-**Definition of done:** all three scenarios complete on the live provider, and at least one off-script
-question in a domain with executors (maths / CS) completes.
+# ================================================================
+# 6. MERMAID CONFIGURATION
+# ================================================================
 
-### N2. Verify ElevenLabs narration 🔴 CRITICAL
+Create one centralized NEMO Mermaid configuration.
 
-**Steps:** add `ELEVENLABS_API_KEY`, enable narration in the config panel, run a lesson.
+Do not scatter Mermaid initialization throughout React components.
 
-**Known unknowns:**
-- **Autoplay policy.** `voice.ts` already reports "Browser blocked audio playback", but submitting a
-  question may not count as a sufficient user gesture in every browser. If it does block, create and
-  unlock a silent `AudioContext` on the first click.
-- **Pacing.** The presenter waits up to 12 s for a beat's narration after its visuals finish. If
-  narration is consistently longer than the visuals, the lesson will feel like it stalls. Consider
-  stretching action durations to fill the audio, or splitting long narration.
-- **Cost.** Every beat is a separate TTS call. Add a per-lesson character budget.
+Use one controlled initialization path.
 
-**Definition of done:** a full lesson narrates without gaps, and pulling the key mid-lesson shows
-`VOICE UNAVAILABLE` and continues silently.
+Requirements:
 
-### N3. Finish the browser acceptance suite 🟠 HIGH
+- dark NEMO theme
+- transparent-compatible background
+- readable text
+- deterministic IDs where supported
+- controlled max text size
+- controlled max edges
+- safe security configuration
+- responsive sizing
+- NEMO typography
+- NEMO colors
+- consistent line widths
+- consistent node spacing
 
-The Chromium harness at `%TEMP%/nemo-shots/verify.mjs` works and got through binary search before the
-run was stopped. **Move it into the repo** as `tests/browser/verify.mjs`, add `playwright` as a
-devDependency, and add `npm run test:browser`.
+Mermaid currently supports configuration for:
 
-It should assert:
-- All three scenarios reach `Completed`.
-- Ink fraction **strictly increases** over time (this is the machine-checkable proof of progressive
-  drawing, which is the core product claim).
-- Zero console errors, zero page errors, zero failed requests.
-- Asking question B while A is running leaves B's question in the status strip and B's content on the
-  board.
-- No canvas content sits under the ask bar (this catches **D1** automatically).
+- layout
+- dark mode
+- maxTextSize
+- maxEdges
+- ELK
+- deterministic IDs
 
-### N4. Director repair loop 🟠 HIGH
+Use these capabilities where appropriate.
 
-Today a plan either validates or the lesson fails. That is the right *default*, but it makes the live
-path brittle in exactly the way **N1** will expose.
+Use securityLevel conservatively.
 
-**Build:** in `pipeline.ts`, after validation fails, re-prompt the Visual Director once with the
-rejection reasons and only the beats that failed. Accept the repaired beats, re-validate, and fail
-only if the second attempt also fails. Emit a `lesson.status` event so the repair is visible in the
-log rather than hidden.
+Do NOT lower Mermaid security settings merely to enable convenience features.
 
-### N5. Domain coverage — more executors 🟠 HIGH
+Default to the safest practical configuration.
 
-285 of 377 catalogued capabilities have no executor. A chemistry or biology question currently
-produces a plan whose every action is refused. That is honest, but it is a bad demo.
+# ================================================================
+# 7. MERMAID LAYOUT
+# ================================================================
 
-Recommended order (highest teaching value per unit of work):
+Use Mermaid's layout capabilities intelligently.
 
-1. **Physics** — `CREATE_VECTOR` (alias exists, needs a proper origin/magnitude form),
-   `DRAW_TRAJECTORY`, `SHOW_COMPONENTS`, `DECOMPOSE_VECTOR`, `CREATE_FORCE_DIAGRAM`.
-   Mostly compositions of `arrowStrokes` — cheap.
-2. **CS data structures** — `DRAW_TREE`, `DRAW_LINKED_LIST`, `DRAW_STACK`, `DRAW_QUEUE`,
-   `DRAW_POINTER`. Same cell-and-anchor pattern as `buildArray`; reuse it.
-3. **Chemistry** — `CREATE_ATOM`, `CREATE_BOND`, `CREATE_MOLECULE`, `CREATE_REACTION_ARROW`.
-4. **Graphs** — `PLOT_POINTS`, `SHOW_TANGENT`, `SHADE_AREA`, `DRAW_NUMBER_LINE` (exists).
+Supported layout families include:
 
-**Do not** flip `implemented: true` in `registry.ts` before the executor exists. The flag's honesty is
-what makes the failure messages trustworthy.
+- Dagre
+- ELK
+- Tidy Tree
+- Cose-Bilkent
 
-Also add a **domain guard**: if the analyzer returns a domain with no executors, fail fast with a
-clear message ("Nemo cannot draw chemistry yet") instead of generating a plan that will be refused
-action by action.
+Use:
 
-### N6. Layout polish 🟡 MEDIUM
+Dagre:
+simple layered diagrams
 
-- Fix **D1** (chrome-aware camera insets) — highest visible impact.
-- `ABOVE` placement collides with the text column when there is no headroom. Generalise the
-  `reserveFlow` idea: any node that will be annotated above should reserve space. Currently only
-  `DRAW_ARRAY` does.
-- Multi-column boards. `flowX` is fixed at the board centre; a long lesson runs off the bottom. Wrap
-  to a second column when the first exceeds a height budget (the code for this was removed when the
-  flow was centred — see git history of `store.ts`).
-- `MOVE_TO` re-runs collision resolution after the tween, which can visibly snap. Resolve first,
-  then tween to the resolved position.
+ELK:
+complex graph structures
+larger diagrams
+architecture
+dense relationship diagrams
 
-### N7. Production build path 🟡 MEDIUM
+Tidy Tree:
+hierarchies
 
-`npm run build` produces a client bundle but the API only exists as Vite middleware, so the built app
-has no backend. Either:
+Cose-Bilkent:
+relationship-heavy force-directed structures where appropriate
 
-- **(a)** Serve the built `dist/` from `server/standalone.ts` and document `npm run build && npm run api`; or
-- **(b)** Keep dev-only and say so loudly in the README.
+Do not blindly use ELK for everything.
 
-Pick (a) if this is ever demoed off a laptop. Note `server/standalone.ts` already exists and works;
-it just needs static-file serving added.
+Create deterministic selection logic.
 
-### N8. P1 features from the original spec 🟢 LOW
+Example:
 
-Deliberately not built. In rough value order:
+simple directed flow
+→ Dagre
 
-- **Follow-up questions.** Today a new question clears the board. Keeping context ("now show me the
-  worst case") would be the most impressive addition.
-- **Image upload + annotation.** The registry catalogs `CREATE_IMAGE`, `IMAGE_REGION`,
-  `ARROW_TO_REGION`, `CIRCLE_REGION`, `LABEL_REGION`; none has an executor.
-- **Pointer/stylus input** so the learner can draw on the board.
-- **Scene persistence** (export/import the scene store as JSON — trivial, it is already serialisable).
-- **Richer handwriting.** The font is recognisable but uniform; per-glyph slant variation and
-  ligature-ish joins would sell "teacher" harder.
+complex architecture
+→ ELK
 
----
+tree hierarchy
+→ Tidy Tree
 
-## 5. Architecture notes for whoever continues
+relationship-heavy graph
+→ Cose-Bilkent if supported and appropriate
 
-### The invariant that must not be broken
+After rendering, NEMO still validates the actual result.
 
-> The model chooses **what**. Application code owns **how**, **where**, and **when**.
+Mermaid layout is NOT the final NEMO layout system.
 
-Every shortcut that violates this — letting the model pass a coordinate "just this once", adding an
-`eval` for a plotted expression, accepting an unlisted action type — collapses the safety,
-determinism and debuggability the whole design buys. `tests/nemo.test.ts` has a `security posture`
-suite that fails the build if `eval`, `new Function`, `speechSynthesis` or a literal API key appears
-anywhere in `src/`, `server/` or `shared/`. Keep it.
+# ================================================================
+# 8. MERMAID ADAPTER
+# ================================================================
 
-### Everything is ink
+Create a dedicated Mermaid adapter.
 
-Text, equations, circles, arrays and arrows all reduce to `InkStroke` polylines. That is why
-progressive drawing, the pen and the anti-overlap engine each exist once rather than per shape. When
-adding a capability, produce strokes — do not add a new render path.
+Suggested conceptual structure:
 
-### Node ids follow a create-vs-reference rule
+visual/
+  renderers/
+    mermaid/
+      MermaidRenderer
+      MermaidAdapter
+      MermaidValidator
+      MermaidTheme
+      MermaidNodeMapper
+      MermaidLayoutSelector
+      MermaidErrorHandler
 
-`action.target` names a **new** node when nothing by that name exists, and refers to an **existing**
-node otherwise. So `DRAW_ARRAY target="array"` claims the name, while `HIGHLIGHT target="array"`
-emphasises it and its band gets a derived id. This is in `makeNode` in `execute.ts`. Derived ids are
-generated by probing, never a global counter — a global counter breaks replay determinism, which was
-a real bug found and fixed in session 1.
+Adapt this structure to the existing repository.
 
-### Attachment is transitive, but siblings still separate
+The Mermaid adapter converts:
 
-A right-angle mark attached to a height line attached to a triangle overlaps all three deliberately —
-`areAttached` walks the chain. But two pointers attached to the *same* array are siblings and **must**
-still be pushed apart. Getting this wrong made the second `low`/`high` markers render on top of each
-other; that was also found and fixed in session 1. Do not widen `areAttached` to shared roots.
+NEMO semantic diagram JSON
+→
+Mermaid source
+→
+Mermaid render
 
-### Determinism is a tested contract
+Do not make the agents directly construct arbitrary Mermaid source as their primary contract.
 
-Ink is seeded from `lessonId + nodeId + strokeIndex`. Two tests assert identical output across
-replays. If you add randomness, seed it from the same chain.
+# ================================================================
+# 9. SEMANTIC MERMAID CONTRACT
+# ================================================================
 
----
+Create structured schemas.
 
-## 6. Environment notes
+Example:
 
-- **Node 24.12** — the backend and tests run TypeScript natively (no build step). This requires
-  `"type": "module"`, explicit `.ts` extensions on server/shared imports, and no non-erasable syntax
-  (no enums, no parameter properties). `erasableSyntaxOnly` is on in `tsconfig.node.json` and will
-  catch violations.
-- **Python 3.14.5** with **Manim** and **Pillow** already installed on this machine.
-- **Playwright + Chromium** installed globally via npx cache; not yet a project dependency.
-- Dev server ports 5173–5175 were occupied; it ran on **5176**. Do not hardcode the port.
+{
+  "type": "flowchart",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "sensor",
+      "label": "Temperature Sensor",
+      "kind": "hardware"
+    },
+    {
+      "id": "esp32",
+      "label": "ESP32",
+      "kind": "microcontroller"
+    }
+  ],
+  "edges": [
+    {
+      "id": "sensor_to_esp32",
+      "from": "sensor",
+      "to": "esp32",
+      "label": "I2C"
+    }
+  ]
+}
 
-## 7. Fast re-verification after any change
+Create Zod schemas.
 
-```bash
-npm test                    # 71 tests, must stay green
-npm run typecheck           # must stay clean
-node scripts/snapshot.ts binary   | python scripts/snapshot.py binary.png
-node scripts/snapshot.ts equation | python scripts/snapshot.py equation.png
-node scripts/snapshot.ts triangle | python scripts/snapshot.py triangle.png
-```
+Validate before rendering.
 
-Then eyeball the three PNGs. That loop catches essentially every layout and handwriting regression in
-under ten seconds, and it is how the geometry bugs in session 1 were found.
+# ================================================================
+# 10. SUPPORTED MERMAID TYPES
+# ================================================================
+
+At minimum integrate:
+
+flowchart
+
+sequence diagram
+
+state diagram
+
+class diagram
+
+architecture diagram
+
+block/system diagram
+
+ER diagram
+
+mindmap where supported
+
+timeline where supported
+
+gitgraph only if useful
+
+Do not expose every Mermaid feature automatically.
+
+Only enable features that are useful for NEMO.
+
+# ================================================================
+# 11. VISUAL FUNCTION REGISTRY
+# ================================================================
+
+Extend the existing VisualFunctionRegistry.
+
+Add:
+
+create_flowchart
+create_sequence_diagram
+create_state_diagram
+create_class_diagram
+create_architecture_diagram
+create_block_diagram
+create_er_diagram
+create_mindmap
+create_timeline
+
+Each function must contain:
+
+name
+description
+renderer
+domain
+category
+parameters
+examples
+constraints
+supports_2d
+supports_interaction
+animation_strategy
+
+Example:
+
+{
+  "name": "create_sequence_diagram",
+  "renderer": "mermaid",
+  "domain": "embedded",
+  "category": "protocol",
+  "description": "Show ordered interaction between systems or components.",
+  "parameters": {
+    "participants": "...",
+    "messages": "..."
+  }
+}
+
+# ================================================================
+# 12. DO NOT MAKE THE REGISTRY AN AGENT
+# ================================================================
+
+The registry is deterministic.
+
+It is not an LLM.
+
+It contains trusted capabilities.
+
+The model receives:
+
+function names
+descriptions
+schemas
+examples
+constraints
+
+The model does not receive:
+
+implementation source code
+filesystem paths
+shell commands
+arbitrary executable code
+
+# ================================================================
+# 13. RENDERER SELECTOR
+# ================================================================
+
+Create a renderer selection system.
+
+The selector considers:
+
+visual purpose
+domain
+relationships
+temporal change
+mathematics
+physics
+3D requirement
+interaction
+complexity
+number of objects
+animation requirements
+learner level
+
+Example:
+
+"What components exist in NEMO?"
+→ Mermaid architecture
+
+"Show what happens when GPIO goes HIGH."
+→ Manim
+
+"Show a silicon lattice."
+→ ManimGL
+
+"Show I2C communication."
+→ Mermaid + Manim
+
+"Show binary search."
+→ Mermaid + Manim
+
+"Show MOSFET concept."
+→ Mermaid + Manim
+possibly ManimGL
+
+# ================================================================
+# 14. DO NOT DISTURB MANIM OR MANIMGL
+# ================================================================
+
+Existing Manim functionality is protected.
+
+Existing ManimGL functionality is protected.
+
+Do not:
+
+- replace imports
+- migrate scenes unnecessarily
+- rewrite working visual functions
+- remove Manim dependencies
+- remove ManimGL dependencies
+- convert existing scenes to Mermaid
+- route everything through Mermaid
+
+Add Mermaid as a sibling renderer.
+
+The existing visual functions must continue to pass their tests.
+
+# ================================================================
+# 15. NEMO NATIVE VISUALS
+# ================================================================
+
+Continue supporting native visual functions.
+
+Use NEMO-native visuals for:
+
+- circuits
+- ESP32
+- Raspberry Pi
+- sensors
+- LEDs
+- semiconductor devices
+- hardware components
+- mathematical diagrams
+- algorithm animation
+
+Mermaid can show the system relationship.
+
+Native visual functions show the physical object.
+
+Manim animates behavior.
+
+# ================================================================
+# 16. WEB IMAGE INTELLIGENCE
+# ================================================================
+
+NEMO must also be able to use REAL images from the web when those images materially improve learning.
+
+Examples:
+
+- brain anatomy
+- neural network illustrations
+- microscope images
+- scientific apparatus
+- real ESP32 board
+- Raspberry Pi board
+- semiconductor wafer
+- transistor micrograph
+- real circuit board
+- historical diagram
+- astronomy image
+- real spacecraft
+- real biological structure
+
+The AI must decide:
+
+"Would a real reference image improve this explanation?"
+
+If yes:
+
+perform an actual retrieval/search operation.
+
+Do not fabricate the URL.
+
+Do not fabricate the source.
+
+Do not generate a fake citation.
+
+# ================================================================
+# 17. IMAGE RETRIEVAL PIPELINE
+# ================================================================
+
+Use:
+
+AI-generated search query
+ ↓
+real image/web retrieval service
+ ↓
+candidate images
+ ↓
+source metadata
+ ↓
+image download/proxy if permitted
+ ↓
+content analysis
+ ↓
+selection
+ ↓
+canvas placement
+ ↓
+annotation
+ ↓
+explanation
+
+The model suggests search intent.
+
+The retrieval subsystem gets real assets.
+
+# ================================================================
+# 18. IMAGE SOURCE METADATA
+# ================================================================
+
+Create:
+
+interface RetrievedImage {
+  id: string;
+  title: string;
+  sourceName: string;
+  sourceUrl: string;
+  imageUrl: string;
+  thumbnailUrl?: string;
+  domain: string;
+  license?: string;
+  attribution?: string;
+}
+
+Do not lose source provenance.
+
+Every externally retrieved image must retain provenance metadata.
+
+# ================================================================
+# 19. IMAGE SAFETY / TRUST
+# ================================================================
+
+Do not automatically trust arbitrary image URLs.
+
+Validate:
+
+- source
+- MIME type
+- file size
+- image dimensions
+- supported formats
+
+Do not render HTML pages where an image is expected.
+
+Prefer proxied/validated image assets where appropriate.
+
+Do not expose unsafe remote HTML.
+
+# ================================================================
+# 20. WEB IMAGE + NEMO EXPLANATION
+# ================================================================
+
+A retrieved image must never simply be dumped into chat.
+
+NEMO should use it as a teaching object.
+
+Example:
+
+Learner:
+"What does a real transistor look like?"
+
+NEMO:
+
+searches real images
+
+retrieves:
+
+[real transistor / microscope image]
+
+then:
+
+- preserves original image
+- adds labels
+- highlights relevant regions
+- draws arrows
+- explains the selected region
+- optionally connects the real image to a Manim schematic
+
+Example:
+
+REAL IMAGE
+ ↓
+annotated region
+ ↓
+schematic representation
+ ↓
+Manim explanation
+
+This is a powerful NEMO capability.
+
+# ================================================================
+# 21. IMAGE ANNOTATION LAYER
+# ================================================================
+
+Create a reusable annotation system.
+
+Capabilities:
+
+annotate_point
+annotate_region
+draw_arrow
+draw_circle
+draw_box
+draw_line
+draw_measurement
+add_label
+add_callout
+crop_region
+zoom_region
+highlight_region
+dim_background
+compare_regions
+
+The annotation layer must preserve the original image underneath.
+
+# ================================================================
+# 22. IMAGE + MANIM HYBRID
+# ================================================================
+
+Example:
+
+Real brain image
+
+       ↓
+
+highlight hippocampus
+
+       ↓
+
+NEMO callout
+
+       ↓
+
+Manim wireframe brain diagram
+
+       ↓
+
+show neural signal flow
+
+This must be supported.
+
+# ================================================================
+# 23. BRAIN WIREFRAME VISUALS
+# ================================================================
+
+NEMO should be able to create wireframe-style conceptual visuals.
+
+Examples:
+
+brain
+heart
+human body
+neuron
+cell
+chip
+CPU
+network
+solar system
+molecule
+protein
+mechanical system
+
+These should NOT depend exclusively on generated raster images.
+
+Prefer:
+
+semantic geometry
+SVG/vector primitives
+Manim geometry
+3D meshes where appropriate
+wireframe structures
+point clouds
+line networks
+
+For 3D cases use ManimGL or the project's approved 3D renderer.
+
+For 2D schematic cases use Manim/native vector rendering.
+
+# ================================================================
+# 24. WORMHOLE VISUALIZATION
+# ================================================================
+
+NEMO must support a wormhole visual that is structurally generated.
+
+Do not rely on a single AI-generated wormhole image.
+
+Create semantic functions such as:
+
+create_spacetime_grid
+create_warped_grid
+create_wormhole_mouth
+create_wormhole_throat
+create_geodesic
+trace_geodesic
+animate_traversal
+create_event_horizon
+create_lensing
+create_3d_wormhole
+
+The visual should communicate:
+
+flat spacetime
+
+        ↓
+
+curvature
+
+        ↓
+
+wormhole mouth
+
+        ↓
+
+throat
+
+        ↓
+
+second region
+
+Use Manim / ManimGL.
+
+Mermaid can optionally provide the conceptual relationship:
+
+Region A
+ ↓
+Wormhole
+ ↓
+Region B
+
+But the actual wormhole geometry is a Manim/ManimGL responsibility.
+
+# ================================================================
+# 25. SCIENTIFIC WIREFRAME ENGINE
+# ================================================================
+
+Create / extend a semantic wireframe capability.
+
+Examples:
+
+create_wireframe_brain
+create_wireframe_heart
+create_wireframe_atom
+create_wireframe_molecule
+create_wireframe_chip
+create_wireframe_machine
+create_wireframe_planet
+create_wireframe_structure
+
+Each should be based on structured primitives, not one opaque AI image.
+
+# ================================================================
+# 26. MODEL DECISION:
+# REAL IMAGE VS DRAWING
+# ================================================================
+
+The Visual Director must decide:
+
+USE_REAL_IMAGE
+
+when:
+- realism matters
+- the learner asks for real-world reference
+- morphology matters
+- hardware identification matters
+- historical/scientific reference matters
+- the real object is easier to understand visually
+
+USE_MERMAID
+
+when:
+- relationships matter
+- flow matters
+- system structure matters
+- sequence matters
+
+USE_MANIM
+
+when:
+- change over time matters
+- equations matter
+- dynamic explanation matters
+- physical processes matter
+
+USE_MANIMGL
+
+when:
+- 3D spatial reasoning matters
+
+USE_NATIVE_ANNOTATION
+
+when:
+- learner supplied an image that needs explanation
+
+# ================================================================
+# 27. "WHERE DO I START?" VISUAL GUIDANCE
+# ================================================================
+
+NEMO must be able to use an image or screenshot and determine:
+
+- what is visible
+- what the major regions are
+- where the learner should start
+- what is most important
+- which labels are relevant
+- what the next visual teaching step should be
+
+Example:
+
+User uploads:
+
+[complex circuit diagram]
+
+NEMO analyzes:
+
+1. power source
+2. input
+3. main component
+4. output
+5. ground
+6. signal path
+
+Then explains:
+
+"Let's start here."
+
+and places a callout on the actual image.
+
+The learner can ask:
+
+"Why does this connect here?"
+
+and NEMO references the selected region.
+
+# ================================================================
+# 28. SCREENSHOT PROCESSING
+# ================================================================
+
+NEMO should support screenshots as first-class learning objects.
+
+Examples:
+
+- code screenshot
+- circuit diagram screenshot
+- textbook page
+- datasheet
+- IDE screenshot
+- terminal screenshot
+- hardware diagram
+- scientific figure
+
+Pipeline:
+
+SCREENSHOT
+ ↓
+VISION UNDERSTANDING
+ ↓
+REGION DETECTION
+ ↓
+SEMANTIC OBJECTS
+ ↓
+ANNOTATION
+ ↓
+EXPLANATION
+
+Preserve original screenshot.
+
+Never replace it with a generated approximation unless explicitly required.
+
+# ================================================================
+# 29. IMAGE + CANVAS INTERACTION
+# ================================================================
+
+Every image region that becomes educationally meaningful should receive a stable NEMO object ID.
+
+Example:
+
+image:
+"mosfet_micrograph_1"
+
+region:
+"gate_region"
+
+learner selects gate region
+
+then asks:
+
+"Why is this important?"
+
+NEMO context:
+
+selectedObjectId = "gate_region"
+
+Use that in question analysis.
+
+# ================================================================
+# 30. MERMAID NODE INTERACTION
+# ================================================================
+
+Mermaid nodes must map to stable semantic IDs.
+
+Example:
+
+Mermaid:
+
+ESP32
+Sensor
+I2C
+
+NEMO IDs:
+
+esp32
+sensor
+i2c_bus
+
+When learner clicks ESP32:
+
+selectedObjectId = "esp32"
+
+Then:
+
+"Why is this here?"
+
+→ answer about ESP32.
+
+Do not lose this relationship after rendering.
+
+# ================================================================
+# 31. UNIFIED VISUAL OBJECT MODEL
+# ================================================================
+
+Create a common model.
+
+Example:
+
+interface VisualObject {
+  id: string;
+  type: string;
+  renderer: "mermaid" | "manim" | "manimgl" | "native" | "image";
+  label?: string;
+  semanticRole?: string;
+  parentId?: string;
+  sourceId?: string;
+  properties?: Record<string, unknown>;
+}
+
+All renderers should reference the same semantic IDs.
+
+# ================================================================
+# 32. UNIFIED VISUAL RELATIONSHIPS
+# ================================================================
+
+Support relationships:
+
+ABOVE
+BELOW
+LEFT_OF
+RIGHT_OF
+CENTERED_ON
+ATTACHED_TO
+CONNECTED_TO
+POINTS_TO
+FOLLOW
+NEAR
+FAR
+CONTAINS
+PART_OF
+DEPENDS_ON
+CAUSES
+SEQUENCE_BEFORE
+SEQUENCE_AFTER
+CONTROLS
+MEASURES
+COMMUNICATES_WITH
+
+Mermaid uses these for structural relationships.
+
+Manim uses these for scene composition.
+
+Image annotation uses them for callouts.
+
+# ================================================================
+# 33. MERMAID + MANIM OBJECT ID MAPPING
+# ================================================================
+
+Example:
+
+Semantic object:
+
+{
+  "id": "esp32",
+  "type": "microcontroller"
+}
+
+Mermaid:
+ESP32["ESP32"]
+
+Manim:
+object ID:
+esp32_board
+
+But the semantic layer should know:
+
+esp32
+ ↕
+esp32_board
+
+This lets NEMO jump between:
+
+architecture view
+physical hardware view
+code view
+
+# ================================================================
+# 34. MULTI-LEVEL EXPLANATIONS
+# ================================================================
+
+A lesson can have:
+
+LEVEL 1:
+concept overview
+
+LEVEL 2:
+structural relationship diagram
+
+LEVEL 3:
+animated process
+
+LEVEL 4:
+technical detail
+
+LEVEL 5:
+3D / physical detail
+
+Example MOSFET:
+
+Level 1:
+Mermaid concept map
+
+Level 2:
+Manim schematic
+
+Level 3:
+channel formation animation
+
+Level 4:
+energy band explanation
+
+Level 5:
+3D semiconductor representation
+
+Do not force all levels into every lesson.
+
+Choose based on learner need.
+
+# ================================================================
+# 35. VISUAL DIRECTOR RULES
+# ================================================================
+
+Update the visual planning prompt.
+
+The Visual Director must reason:
+
+"What representation most efficiently reduces the learner's cognitive load?"
+
+Not:
+
+"What renderer is coolest?"
+
+Use this preference:
+
+RELATIONSHIP
+→ Mermaid
+
+DYNAMIC CHANGE
+→ Manim
+
+MATHEMATICAL TRANSFORMATION
+→ Manim
+
+PHYSICAL PROCESS
+→ Manim
+
+3D SPATIAL STRUCTURE
+→ ManimGL
+
+REAL-WORLD REFERENCE
+→ retrieved image
+
+USER-PROVIDED FIGURE
+→ annotate original image
+
+COMBINED STRUCTURE + DYNAMICS
+→ Mermaid + Manim
+
+COMBINED REAL IMAGE + SCHEMATIC
+→ web/image + Manim
+
+COMBINED 3D + CONCEPT MAP
+→ Mermaid + ManimGL
+
+# ================================================================
+# 36. EXAMPLE:
+# ESP32 + SENSOR
+# ================================================================
+
+User:
+"How does ESP32 read a temperature sensor?"
+
+Plan:
+
+Mermaid:
+
+Temperature Sensor
+        ↓
+I2C
+        ↓
+ESP32
+        ↓
+Application
+
+Then native/Manim:
+
+ESP32 board
+GPIO/I2C pins
+sensor
+wires
+
+Then Manim:
+
+START
+ ↓
+ADDRESS
+ ↓
+ACK
+ ↓
+DATA
+ ↓
+STOP
+
+Then code:
+
+sensor.request()
+
+Then real image if useful:
+
+actual ESP32 board image
+
+annotate:
+
+I2C pins
+
+This becomes ONE lesson.
+
+# ================================================================
+# 37. EXAMPLE:
+# RASPBERRY PI
+# ================================================================
+
+User:
+"How does Raspberry Pi read a button?"
+
+Mermaid:
+
+Button
+ ↓
+GPIO17
+ ↓
+Python
+ ↓
+Decision
+ ↓
+Action
+
+Then native diagram:
+
+Raspberry Pi
++
+button
++
+wire
+
+Then Manim:
+
+HIGH / LOW state transition
+
+Then code:
+
+GPIO.input(17)
+
+# ================================================================
+# 38. EXAMPLE:
+# BINARY SEARCH
+# ================================================================
+
+Mermaid:
+
+START
+ ↓
+MIDPOINT
+ ↓
+COMPARE
+ ├── equal → FOUND
+ ├── smaller → LEFT
+ └── larger → RIGHT
+
+Manim:
+
+[3][7][10][14][18][21][27][31][36]
+
+target = 31
+
+animate midpoint
+
+animate comparison
+
+eliminate half
+
+repeat
+
+final:
+
+31 found
+
+O(log n)
+
+Do not replace this existing Manim lesson.
+
+Add Mermaid as an overview layer.
+
+# ================================================================
+# 39. EXAMPLE:
+# SEMICONDUCTOR
+# ================================================================
+
+Question:
+"Explain a PN junction."
+
+Mermaid:
+
+Semiconductor
+ ↓
+P-type + N-type
+ ↓
+Contact
+ ↓
+Diffusion
+ ↓
+Depletion Region
+ ↓
+Electric Field
+ ↓
+Equilibrium
+
+Manim:
+
+electrons
+holes
+diffusion
+depletion
+electric field
+
+ManimGL:
+
+3D lattice if learner asks for deeper visualization.
+
+# ================================================================
+# 40. EXAMPLE:
+# BRAIN
+# ================================================================
+
+Question:
+"Explain the parts of the brain."
+
+NEMO may:
+
+1. Retrieve a real educational brain image.
+2. Preserve source attribution.
+3. Analyze major regions.
+4. Annotate selected regions.
+5. Create a wireframe/semantic brain representation.
+6. Use Manim to explain signal/structural concepts.
+7. Use Mermaid for high-level relationships if useful.
+
+Do not generate a fake "real medical image."
+
+If a medical/scientific real image is retrieved, preserve source metadata.
+
+# ================================================================
+# 41. EXAMPLE:
+# WORMHOLE
+# ================================================================
+
+Question:
+"Explain a wormhole."
+
+Use:
+
+Mermaid:
+Region A → Wormhole → Region B
+
+Manim:
+curved grid
+
+ManimGL:
+3D throat / spacetime structure
+
+Animation:
+particle traverses the throat
+
+Voice:
+explain the geometry while the particle moves
+
+Do not use one generic AI image as the complete explanation.
+
+# ================================================================
+# 42. RESOURCE / WEB CRAWLING UI
+# ================================================================
+
+Integrate this with the NEMO chat processing UI.
+
+When online research actually occurs:
+
+[NEMO] Searching useful resources... >
+
+Expand:
+
+✓ Understanding question
+✓ Planning explanation
+→ Searching references
+
+[Espressif]
+[Arduino]
+[Wikipedia]
+[YouTube]
+
+Do not display fake sources.
+
+Do not fabricate crawl events.
+
+Do not show websites that were not actually retrieved.
+
+# ================================================================
+# 43. SCREENSHOT / RESEARCH ACTIVITY
+# ================================================================
+
+If NEMO opens/retrieves a reference and captures an allowed screenshot or preview:
+
+show:
+
+→ Inspecting reference
+→ Identifying relevant section
+→ Extracting visual context
+
+Then optionally:
+
+[thumbnail]
+
+with:
+
+"Starting here"
+
+NEMO can place a callout around the useful portion.
+
+# ================================================================
+# 44. WEB SOURCE LOGOS
+# ================================================================
+
+Use actual source favicon/logo metadata when available.
+
+Fallback:
+
+domain monogram
+
+Do not ask the LLM to provide logo URLs.
+
+Store source provenance.
+
+# ================================================================
+# 45. OFFLINE MODE
+# ================================================================
+
+Everything in this visual architecture must continue working offline except capabilities that inherently require external network access.
+
+Offline supports:
+
+- local model
+- Mermaid
+- Manim
+- ManimGL
+- native visuals
+- local image assets
+- cached resources
+- local image analysis
+- local vision model
+- local screenshot analysis
+
+Online additionally supports:
+
+- cloud models
+- live web search
+- live image retrieval
+- live YouTube retrieval
+- cloud voice
+
+Mermaid MUST work offline because it is a local application dependency.
+
+# ================================================================
+# 46. OFFLINE TRAINING
+# ================================================================
+
+The local model should be trained / fine-tuned / instructed to understand renderer selection.
+
+Training examples:
+
+Question:
+"Show the pipeline."
+
+→ Mermaid flowchart
+
+Question:
+"Animate the equation."
+
+→ Manim
+
+Question:
+"Show this in 3D."
+
+→ ManimGL
+
+Question:
+"Find a real photo of an ESP32."
+
+→ web image retrieval in online mode
+
+Question:
+"I uploaded this circuit."
+
+→ image analysis + annotation
+
+Question:
+"Explain I2C."
+
+→ Mermaid + Manim
+
+The model learns WHAT representation to select.
+
+# ================================================================
+# 47. LOCAL VISUAL ASSET LIBRARY
+# ================================================================
+
+Offline mode should have a local asset cache.
+
+Examples:
+
+ESP32
+Raspberry Pi
+Arduino
+STM32
+MOSFET
+BJT
+diode
+LED
+breadboard
+sensors
+chips
+brain wireframe
+common scientific diagrams
+
+These assets should have metadata.
+
+Example:
+
+{
+  "id": "esp32_board",
+  "category": "embedded",
+  "visualTypes": [
+    "2d",
+    "schematic"
+  ]
+}
+
+# ================================================================
+# 48. VISUAL ASSET POLICY
+# ================================================================
+
+Prefer reusable semantic assets over giant raster images.
+
+For example:
+
+ESP32
+
+should be:
+
+board geometry
++
+pin geometry
++
+labels
++
+semantic connections
+
+rather than one PNG.
+
+This enables:
+
+clicking GPIO2
+
+animating the signal
+
+highlighting a pin
+
+changing state
+
+connecting an LED
+
+# ================================================================
+# 49. DETERMINISTIC RENDERING
+# ================================================================
+
+Visual output should be reproducible.
+
+Use deterministic IDs where available.
+
+Use stable semantic IDs.
+
+Do not let the model randomly change object identifiers.
+
+Same semantic lesson should produce broadly stable structure.
+
+# ================================================================
+# 50. MERMAID SECURITY
+# ================================================================
+
+Treat Mermaid source as untrusted generated content.
+
+Validate and sanitize.
+
+Use conservative security configuration.
+
+Do not enable arbitrary script execution.
+
+Do not allow generated diagrams to inject arbitrary web behavior.
+
+Avoid lowering security level unnecessarily.
+
+Use NEMO's trusted configuration instead of accepting arbitrary configuration directives from model output.
+
+# ================================================================
+# 51. FRONTMATTER / CONFIG CONTROL
+# ================================================================
+
+Do not allow the LLM to override NEMO's protected rendering/security settings.
+
+If model output contains Mermaid configuration:
+
+strip unsupported configuration
+
+permit only an explicit safe allowlist:
+
+direction
+layout request
+selected diagram-specific visual hints
+
+Do not permit:
+
+security overrides
+external script behavior
+unsafe HTML behavior
+arbitrary links unless explicitly supported and sanitized
+
+# ================================================================
+# 52. DIAGRAM SIZE LIMITS
+# ================================================================
+
+NEMO must detect oversized diagrams.
+
+If too many nodes:
+
+DO NOT generate one massive diagram.
+
+Instead:
+
+summarize
+
+then expand
+
+Example:
+
+"NEMO architecture"
+
+Overview:
+8 nodes
+
+Then:
+Frontend detail
+
+Then:
+Agent detail
+
+Then:
+Renderer detail
+
+This is a teaching feature.
+
+# ================================================================
+# 53. PROGRESSIVE DIAGRAM EXPLANATION
+# ================================================================
+
+Mermaid diagrams should support progressive focus.
+
+Example:
+
+Full diagram:
+
+Sensor
+ ↓
+ADC
+ ↓
+MCU
+ ↓
+Application
+
+Step 1:
+focus Sensor
+
+Step 2:
+focus ADC
+
+Step 3:
+focus MCU
+
+Step 4:
+focus Application
+
+Use NEMO overlay/selection state.
+
+Do not require Mermaid to animate complex object movement.
+
+# ================================================================
+# 54. HYBRID LESSON TIMELINE
+# ================================================================
+
+Create a unified timeline schema.
+
+Example:
+
+{
+  "beats": [
+    {
+      "id": "overview",
+      "renderer": "mermaid",
+      "duration": 5
+    },
+    {
+      "id": "dynamic",
+      "renderer": "manim",
+      "duration": 12
+    },
+    {
+      "id": "deep",
+      "renderer": "manimgl",
+      "duration": 10
+    }
+  ]
+}
+
+Narration segments refer to beat IDs.
+
+# ================================================================
+# 55. NARRATION
+# ================================================================
+
+Voice must understand renderer transitions.
+
+Example:
+
+Beat 1:
+"This diagram shows the three main components."
+
+Beat 2:
+"Now watch what happens to the signal."
+
+Beat 3:
+"Let's look inside the semiconductor."
+
+Do not narrate implementation details.
+
+# ================================================================
+# 56. VISUAL CRITIC
+# ================================================================
+
+Extend the Visual Critic to inspect:
+
+Mermaid
+Manim
+ManimGL
+images
+annotations
+
+Checks:
+
+clipping
+overlap
+unreadable labels
+excessive whitespace
+broken connections
+incorrect focus
+bad composition
+wrong diagram scale
+low contrast
+missing nodes
+misaligned annotations
+image crop problems
+source attribution visibility when required
+
+# ================================================================
+# 57. IMAGE CRITIC
+# ================================================================
+
+For retrieved image lessons:
+
+check:
+
+is the target object actually visible?
+is it too small?
+is annotation correctly placed?
+is the image blurry?
+is source attribution preserved?
+is the selected region correct?
+
+If not:
+
+repair by:
+
+crop
+zoom
+alternate image
+move annotation
+select different source
+
+Maximum repair attempts:
+2
+
+# ================================================================
+# 58. MERMAID CRITIC
+# ================================================================
+
+Validate:
+
+syntax
+node count
+edge count
+layout
+text size
+overlap
+viewport
+semantic correctness
+object mapping
+
+Do not accept a Mermaid diagram only because the Mermaid parser succeeds.
+
+It must also be pedagogically readable.
+
+# ================================================================
+# 59. FALLBACK STRATEGY
+# ================================================================
+
+If Mermaid fails:
+
+Mermaid
+ ↓
+repair
+ ↓
+retry
+ ↓
+if still failing:
+native NEMO diagram
+or
+simplified Manim structure
+
+If web image retrieval fails:
+
+use local asset if available
+or
+native visual
+
+If Manim fails:
+
+safe fallback to structured diagram / static visual where pedagogically acceptable
+
+The entire lesson must not crash because one renderer fails.
+
+# ================================================================
+# 60. ERROR CODES
+# ================================================================
+
+Introduce structured visual errors:
+
+MERMAID_PARSE_ERROR
+MERMAID_LAYOUT_ERROR
+MERMAID_RENDER_ERROR
+IMAGE_RETRIEVAL_ERROR
+IMAGE_VALIDATION_ERROR
+IMAGE_ANNOTATION_ERROR
+MANIM_RENDER_ERROR
+MANIMGL_RENDER_ERROR
+VISUAL_LAYOUT_ERROR
+VISUAL_CRITIC_FAILURE
+
+Do not expose raw stack traces to users.
+
+# ================================================================
+# 61. CHAT PROCESSING INTEGRATION
+# ================================================================
+
+During generation:
+
+[NEMO] Analyzing your question... >
+
+[NEMO] Planning the explanation... >
+
+[NEMO] Choosing visual strategy... >
+
+[NEMO] Building the visual lesson... >
+
+If Mermaid selected:
+
+[NEMO] Building concept diagram... >
+
+If Manim selected:
+
+[NEMO] Creating animated explanation... >
+
+If image search is needed:
+
+[NEMO] Finding a useful real-world reference... >
+
+If hybrid:
+
+[NEMO] Combining structure and animation... >
+
+These must come from actual backend events.
+
+Do not fake progress with setTimeout.
+
+# ================================================================
+# 62. EXPANDABLE REASONING PANEL
+# ================================================================
+
+Clicking > opens:
+
+✓ Question understood
+✓ Answer verified
+✓ Teaching strategy selected
+✓ Visual strategy selected
+→ Building Mermaid overview
+→ Creating Manim animation
+○ Preparing deeper visualization
+
+If online retrieval:
+
+[Espressif]
+[YouTube]
+[NVIDIA]
+[Wikipedia]
+
+Only actual retrieved sources.
+
+# ================================================================
+# 63. RESPONSE CONTAINER
+# ================================================================
+
+Final response should appear in:
+
+dark gray rounded container
+
+with:
+
+white text
+NEMO avatar
+Markdown
+code blocks
+visual previews
+source chips
+speaker
+like
+dislike
+share
+copy
+
+Do not change this visual direction while integrating Mermaid.
+
+# ================================================================
+# 64. MERMAID IN CHAT
+# ================================================================
+
+If the lesson has a Mermaid overview:
+
+render it directly as part of the response/lesson.
+
+Do not show raw Mermaid syntax to the learner by default.
+
+Optional:
+"View diagram source"
+only under advanced/debug mode.
+
+# ================================================================
+# 65. CANVAS
+# ================================================================
+
+The primary visual result belongs to the NEMO canvas.
+
+The chat response should explain it.
+
+Example:
+
+Chat:
+"At a high level, the sensor communicates with the ESP32 over I2C."
+
+Canvas:
+Mermaid diagram
+
+Then:
+Manim animation
+
+Then:
+annotated real ESP32 image
+
+All can coexist in one learning canvas.
+
+# ================================================================
+# 66. CANVAS OBJECT SELECTION
+# ================================================================
+
+Every object must have:
+
+stable ID
+renderer
+semantic meaning
+
+Selection:
+
+click node/image/component
+
+updates:
+
+selectedObjectId
+
+Then chat can understand:
+
+"Why is this connected?"
+
+"This"
+
+means the selected object.
+
+# ================================================================
+# 67. FOLLOW-UP QUESTIONS
+# ================================================================
+
+Example:
+
+Initial:
+
+"Explain MOSFET."
+
+NEMO shows:
+
+Mermaid overview
++
+Manim animation
+
+Learner clicks:
+
+Gate
+
+asks:
+
+"Why does increasing this voltage form the channel?"
+
+Question Analyzer receives:
+
+selectedObjectId = gate
+
+lessonContext = MOSFET
+
+currentVisualBeat = channel formation
+
+Then it answers in context.
+
+# ================================================================
+# 68. DO NOT RESET THE CANVAS
+# ================================================================
+
+Follow-up questions should preserve existing objects where possible.
+
+Do not destroy:
+
+MOSFET
+
+and recreate it for every explanation.
+
+Transform existing objects.
+
+Preserve learner context.
+
+# ================================================================
+# 69. MERMAID ARCHITECTURE VISUALS FOR NEMO
+# ================================================================
+
+NEMO must use Mermaid for its own architecture when useful.
+
+Example:
+
+Frontend
+ ↓
+API
+ ↓
+LangGraph
+ ↓
+Model Router
+ ↓
+Teaching Director
+ ↓
+Visual Director
+ ↓
+Renderer Registry
+ ├── Mermaid
+ ├── Manim
+ └── ManimGL
+ ↓
+Render Worker
+ ↓
+Critic
+ ↓
+Canvas
+
+Then Manim can animate a request moving through the architecture.
+
+This should become a strong NEMO demo.
+
+# ================================================================
+# 70. TEST SUITE
+# ================================================================
+
+Add tests for:
+
+Mermaid installation
+Mermaid initialization
+Mermaid schemas
+Mermaid adapter
+Mermaid rendering
+Mermaid layouts
+Mermaid theme
+Mermaid node mapping
+renderer selector
+hybrid lessons
+image retrieval model
+image provenance
+image annotation
+canvas selection
+fallbacks
+critic
+repair
+offline mode
+online mode
+
+# ================================================================
+# 71. GOLDEN VISUAL TESTS
+# ================================================================
+
+Create or preserve golden tests for:
+
+1. Binary search
+2. Integral
+3. Physics
+4. Benzene
+5. ESP32 LED
+6. Raspberry Pi GPIO
+7. I2C
+8. SPI
+9. UART
+10. PN junction
+11. MOSFET
+12. CMOS
+13. voltage divider
+14. NEMO architecture
+15. brain wireframe
+16. wormhole
+17. real-image annotation
+
+# ================================================================
+# 72. PERFORMANCE
+# ================================================================
+
+Do not run all renderers unnecessarily.
+
+Use the minimum visual stack needed for the teaching objective.
+
+Examples:
+
+Simple process:
+Mermaid only
+
+Dynamic process:
+Manim only
+
+Complex protocol:
+Mermaid + Manim
+
+3D device:
+ManimGL only or Mermaid + ManimGL
+
+Real image:
+image + annotation
+
+Complex scientific lesson:
+image + Mermaid + Manim + optional ManimGL
+
+# ================================================================
+# 73. CACHING
+# ================================================================
+
+Cache deterministic Mermaid diagrams.
+
+Cache key:
+
+semantic diagram hash
++
+Mermaid version
++
+theme
++
+layout
++
+renderer configuration
+
+Do NOT globally cache private/personalized content without proper isolation.
+
+Cache retrieved assets according to provenance and storage policy.
+
+# ================================================================
+# 74. OFFLINE RESOURCE CACHE
+# ================================================================
+
+Offline mode can use previously retrieved resources.
+
+Maintain:
+
+resource cache
+image cache
+diagram cache
+lesson cache
+
+This allows previously accessed material to remain useful without internet.
+
+# ================================================================
+# 75. MODEL-PROVIDER INDEPENDENCE
+# ================================================================
+
+Gemini
+OpenRouter
+Local Model
+
+must all be capable of producing the same semantic visual plan.
+
+Do not bake Mermaid-specific logic into one provider.
+
+Do not bake Manim-specific logic into one provider.
+
+Visual semantics remain provider-independent.
+
+# ================================================================
+# 76. MODEL OUTPUT EXAMPLE
+# ================================================================
+
+For:
+
+"Explain I2C"
+
+The model should return something conceptually similar to:
+
+{
+  "visualLesson": {
+    "beats": [
+      {
+        "id": "overview",
+        "renderer": "mermaid",
+        "type": "sequence"
+      },
+      {
+        "id": "electrical",
+        "renderer": "manim",
+        "type": "signal"
+      }
+    ]
+  }
+}
+
+Then the runtime generates the actual renderer-specific artifacts.
+
+# ================================================================
+# 77. DO NOT GENERATE ARBITRARY CODE
+# ================================================================
+
+Forbidden:
+
+LLM
+ ↓
+arbitrary Python
+ ↓
+shell
+ ↓
+Manim
+
+Forbidden:
+
+LLM
+ ↓
+arbitrary JS
+ ↓
+Mermaid
+ ↓
+unsafe execution
+
+Preferred:
+
+LLM
+ ↓
+validated semantic plan
+ ↓
+trusted registry
+ ↓
+renderer adapter
+ ↓
+renderer
+
+# ================================================================
+# 78. NEMO VISUAL QUALITY STANDARD
+# ================================================================
+
+Visuals should be:
+
+clear
+minimal
+educational
+readable
+spatially organized
+semantic
+deterministic
+responsive
+consistent
+
+Avoid:
+
+decorative complexity
+random objects
+giant diagrams
+unnecessary 3D
+fake image generation
+unstructured arrows
+overlapping labels
+tiny text
+renderer-specific visual inconsistency
+
+# ================================================================
+# 79. FINAL VISUAL DECISION TABLE
+# ================================================================
+
+Use:
+
+MERMAID
+for:
+- structure
+- relations
+- architecture
+- state
+- sequence
+- process
+- conceptual maps
+
+MANIM
+for:
+- mathematics
+- algorithms
+- physics
+- circuits
+- signals
+- code execution
+- semiconductor processes
+- temporal animation
+
+MANIMGL
+for:
+- 3D
+- spatial geometry
+- semiconductor structures
+- hardware structure
+- wormholes
+- crystal lattices
+
+NEMO NATIVE
+for:
+- hardware components
+- reusable educational objects
+- circuit elements
+- embedded boards
+- interactive canvas primitives
+
+WEB IMAGE
+for:
+- real-world references
+- photographs
+- micrographs
+- actual hardware
+- scientific imagery
+
+IMAGE ANNOTATION
+for:
+- user uploads
+- screenshots
+- diagrams
+- references
+- "start here" teaching
+
+# ================================================================
+# 80. FINAL TARGET ARCHITECTURE
+# ================================================================
+
+                            USER
+                              │
+                              ▼
+                    CHAT + INFINITE CANVAS
+                              │
+                              ▼
+                     QUESTION ANALYZER
+                              │
+                              ▼
+                            SOLVER
+                              │
+                              ▼
+                     ANSWER REVIEWER
+                              │
+                              ▼
+                     TEACHING DIRECTOR
+                              │
+                              ▼
+                      VISUAL DIRECTOR
+                              │
+                              ▼
+               SEMANTIC VISUAL PLAN
+                              │
+                              ▼
+                   VISUAL CAPABILITY
+                       REGISTRY
+                              │
+                              ▼
+                   RENDERER SELECTOR
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+     MERMAID                MANIM               MANIMGL
+        │                     │                     │
+        │                     │                     │
+  STRUCTURE              ANIMATION                 3D
+  RELATIONSHIPS          MATHEMATICS               SPATIAL
+  FLOW                   PHYSICS                   HARDWARE
+  SEQUENCE               CIRCUITS                  SEMICONDUCTOR
+  STATE                  ALGORITHMS                GEOMETRY
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              │
+                 ┌────────────┴────────────┐
+                 │                         │
+                 ▼                         ▼
+          NEMO NATIVE                 WEB / IMAGE
+          VISUALS                    RETRIEVAL
+                 │                         │
+                 │                    IMAGE
+                 │                   ANNOTATION
+                 │                         │
+                 └────────────┬────────────┘
+                              ▼
+                      UNIFIED SCENE GRAPH
+                              │
+                              ▼
+                    DETERMINISTIC LAYOUT
+                              │
+                              ▼
+                         TIMELINE
+                              │
+                              ▼
+                           RENDER
+                              │
+                              ▼
+                      VISUAL CRITIC
+                              │
+                         ┌────┴────┐
+                         │         │
+                       FAIL       PASS
+                         │         │
+                         ▼         ▼
+                      REPAIR     VOICE
+                         │         │
+                         └────┬────┘
+                              ▼
+                       QUICK CHECK
+                              │
+                              ▼
+                     LEARNER ANSWER
+                              │
+                              ▼
+                       ADAPTATION
+                              │
+                              ▼
+                     PERSISTENT LESSON
+
+# ================================================================
+# 81. CRITICAL NON-REGRESSION REQUIREMENT
+# ================================================================
+
+After implementation:
+
+DO NOT claim completion merely because Mermaid renders.
+
+Verify:
+
+- existing application still starts
+- existing chat still works
+- Gemini still works
+- OpenRouter still works
+- local model provider still works
+- dynamic model discovery still works
+- Manim still renders
+- ManimGL still renders
+- existing visual functions still work
+- existing canvas still works
+- handwriting context still works
+- image upload still works
+- Mermaid renders
+- Mermaid can coexist with Manim
+- Mermaid can coexist with ManimGL
+- hybrid lessons work
+- real images can be retrieved online
+- retrieved image provenance is preserved
+- screenshots can be analyzed
+- images can be annotated
+- clicked visual objects retain semantic IDs
+- follow-up questions use selected object context
+- offline Mermaid works
+- online Mermaid + web retrieval works
+- visual critic works
+- repair works
+- fallback works
+
+# ================================================================
+# 82. REQUIRED ACCEPTANCE DEMOS
+# ================================================================
+
+DEMO 1:
+Binary Search
+
+Expected:
+Mermaid overview
++
+Manim execution animation
+
+DEMO 2:
+ESP32 LED
+
+Expected:
+Mermaid software/hardware flow
++
+native ESP32
++
+GPIO
++
+Manim signal flow
+
+DEMO 3:
+I2C
+
+Expected:
+Mermaid sequence
++
+Manim waveform
+
+DEMO 4:
+MOSFET
+
+Expected:
+Mermaid concept map
++
+Manim device explanation
++
+optional ManimGL 3D
+
+DEMO 5:
+PN Junction
+
+Expected:
+Mermaid conceptual flow
++
+Manim carriers
++
+optional ManimGL lattice
+
+DEMO 6:
+Raspberry Pi
+
+Expected:
+Mermaid GPIO flow
++
+native board
++
+Manim state transition
+
+DEMO 7:
+Brain
+
+Expected:
+real retrieved educational image where available
++
+annotation
++
+wireframe conceptual visual
+
+DEMO 8:
+Wormhole
+
+Expected:
+Mermaid conceptual overview
++
+Manim curved spacetime
++
+ManimGL 3D where useful
+
+DEMO 9:
+NEMO Architecture
+
+Expected:
+Mermaid architecture diagram
++
+optional Manim animation of data flow
+
+# ================================================================
+# 83. IMPLEMENTATION PRINCIPLE
+# ================================================================
+
+Do not think:
+
+"Add Mermaid."
+
+Think:
+
+"Create a unified multimodal visual intelligence layer."
+
+Mermaid is one renderer.
+
+Manim is one renderer.
+
+ManimGL is one renderer.
+
+Retrieved images are another visual source.
+
+NEMO native primitives are another.
+
+All must share:
+
+semantic IDs
+scene state
+layout semantics
+selection
+lesson context
+narration beats
+critic
+repair
+canvas integration
+
+# ================================================================
+# 84. FINAL RULE
+# ================================================================
+
+NEMO must never ask:
+
+"What renderer can I force this into?"
+
+NEMO must ask:
+
+"What visual representation will help this learner understand the concept?"
+
+Then choose:
+
+MERMAID
+MANIM
+MANIMGL
+NATIVE
+REAL IMAGE
+IMAGE ANNOTATION
+or a HYBRID
+
+based on pedagogical need.
+
+The final result must make NEMO feel like a single intelligent visual teacher rather than a collection of unrelated visualization tools.
+
+IMPLEMENT THE COMPLETE INTEGRATION.
+DO NOT STOP AT SCAFFOLDING.
+DO NOT CREATE A DEMO-ONLY MERMAID PAGE.
+DO NOT BREAK EXISTING MANIM / MANIMGL.
+VERIFY THE COMPLETE END-TO-END PIPELINE.

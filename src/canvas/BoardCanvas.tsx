@@ -12,8 +12,10 @@
 
 /* oxlint-disable react/immutability */
 import { useCallback, useEffect, useRef } from 'react';
-import type { InkStroke, SceneNode } from '../../shared/contracts.ts';
+import type { InkStroke, SceneNode, Vec2 } from '../../shared/contracts.ts';
+import { worldBounds } from '../../shared/contracts.ts';
 import type { SceneStore } from '../scene/store.ts';
+import { MermaidLayer } from '../visual/MermaidLayer.tsx';
 
 interface Props {
   store: SceneStore;
@@ -21,6 +23,24 @@ interface Props {
   drawing: boolean;
   onManualCamera?: () => void;
   onZoomChange?: (zoom: number) => void;
+  /** When true, a pointer drag circles a region instead of panning. */
+  annotateMode?: boolean;
+  /** Fired once a circled region has been resolved into the store. */
+  onRegionSelected?: (nodeIds: string[]) => void;
+}
+
+/** True when `point` lies inside `polygon` (standard ray-casting test). */
+function pointInPolygon(point: Vec2, polygon: Vec2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses = a.y > point.y !== b.y > point.y;
+    if (!crosses) continue;
+    const xIntersect = ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+    if (point.x < xIntersect) inside = !inside;
+  }
+  return inside;
 }
 
 /** Cached per-stroke lengths so progress maths is not redone every frame. */
@@ -178,11 +198,20 @@ function paintPen(ctx: CanvasRenderingContext2D, x: number, y: number, down: boo
   ctx.restore();
 }
 
-export function BoardCanvas({ store, drawing, onManualCamera, onZoomChange }: Props) {
+export function BoardCanvas({
+  store,
+  drawing,
+  onManualCamera,
+  onZoomChange,
+  annotateMode = false,
+  onRegionSelected,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef(0);
   const dragRef = useRef<{ x: number; y: number; camX: number; camY: number } | null>(null);
   const lastZoomRef = useRef(store.camera.zoom);
+  /** World-space points of the lasso currently being drawn, if any. */
+  const lassoRef = useRef<Vec2[] | null>(null);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -240,6 +269,27 @@ export function BoardCanvas({ store, drawing, onManualCamera, onZoomChange }: Pr
       if (drawing) paintPen(ctx, penAt.x * zoom + offsetX, penAt.y * zoom + offsetY, store.penDown);
     }
 
+    const lasso = lassoRef.current;
+    if (lasso && lasso.length > 1) {
+      ctx.save();
+      ctx.beginPath();
+      lasso.forEach((p, i) => {
+        const sx = p.x * zoom + offsetX;
+        const sy = p.y * zoom + offsetY;
+        if (i === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      });
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255, 196, 84, 0.12)';
+      ctx.fill();
+      ctx.setLineDash([6, 5]);
+      ctx.strokeStyle = 'rgba(255, 196, 84, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
     frameRef.current = requestAnimationFrame(render);
   }, [store, drawing, onZoomChange]);
 
@@ -278,16 +328,47 @@ export function BoardCanvas({ store, drawing, onManualCamera, onZoomChange }: Pr
     [store, onManualCamera]
   );
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLCanvasElement>) => {
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
-      dragRef.current = { x: e.clientX, y: e.clientY, camX: store.camera.x, camY: store.camera.y };
+  /** Screen-space pointer coordinates converted to world space. */
+  const toWorld = useCallback(
+    (clientX: number, clientY: number): Vec2 | null => {
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const cam = store.camera;
+      return {
+        x: (clientX - rect.left - rect.width / 2) / cam.zoom + cam.x,
+        y: (clientY - rect.top - rect.height / 2) / cam.zoom + cam.y,
+      };
     },
     [store]
   );
 
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      if (annotateMode) {
+        const point = toWorld(e.clientX, e.clientY);
+        lassoRef.current = point ? [point] : [];
+        return;
+      }
+      dragRef.current = { x: e.clientX, y: e.clientY, camX: store.camera.x, camY: store.camera.y };
+    },
+    [store, annotateMode, toWorld]
+  );
+
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (annotateMode) {
+        if (!lassoRef.current) return;
+        const point = toWorld(e.clientX, e.clientY);
+        if (!point) return;
+        const last = lassoRef.current[lassoRef.current.length - 1];
+        // Skip near-duplicate points so a slow drag does not bloat the path.
+        if (!last || Math.hypot(point.x - last.x, point.y - last.y) > 4 / store.camera.zoom) {
+          lassoRef.current = [...lassoRef.current, point];
+        }
+        return;
+      }
       const drag = dragRef.current;
       if (!drag) return;
       const dx = (e.clientX - drag.x) / store.camera.zoom;
@@ -296,23 +377,53 @@ export function BoardCanvas({ store, drawing, onManualCamera, onZoomChange }: Pr
       store.camera = { ...store.camera, x: drag.camX - dx, y: drag.camY - dy };
       store.touch();
     },
-    [store, onManualCamera]
+    [store, onManualCamera, annotateMode, toWorld]
   );
+
+  /** Minimum enclosed area (world units²) before a lasso counts as a real circle, not a stray click. */
+  const MIN_LASSO_AREA = 400;
+
+  const finishLasso = useCallback(() => {
+    const points = lassoRef.current;
+    lassoRef.current = null;
+    if (!points || points.length < 3) return;
+
+    let area = 0;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      area += points[j].x * points[i].y - points[i].x * points[j].y;
+    }
+    if (Math.abs(area) / 2 < MIN_LASSO_AREA) return;
+
+    const matched = store
+      .list()
+      .filter((n) => n.visible && n.localBounds.w > 0)
+      .filter((n) => {
+        const b = worldBounds(n);
+        return pointInPolygon({ x: b.x + b.w / 2, y: b.y + b.h / 2 }, points);
+      });
+
+    store.selectRegion(points, matched.map((n) => n.id));
+    onRegionSelected?.(matched.map((n) => n.semanticRole || n.id));
+  }, [store, onRegionSelected]);
 
   const endDrag = useCallback(() => {
     dragRef.current = null;
-  }, []);
+    if (annotateMode) finishLasso();
+  }, [annotateMode, finishLasso]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="board"
-      onWheel={onWheel}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onPointerLeave={endDrag}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        className={`board${annotateMode ? ' board--annotate' : ''}`}
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onPointerLeave={endDrag}
+      />
+      <MermaidLayer store={store} />
+    </>
   );
 }
